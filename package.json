@@ -9,14 +9,10 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@azure/identity": "^4.13.1",
     "@line/bot-sdk": "^11.0.0",
-    "@microsoft/microsoft-graph-client": "^3.0.7",
     "@upstash/qstash": "^2.10.1",
-    "googleapis": "^171.4.0",
-    "imapflow": "^1.3.1",
+    "google-auth-library": "^10.6.2",
     "next": "16.2.3",
-    "nodemailer": "^8.0.5",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
@@ -24,7 +20,6 @@
     "@supabase/supabase-js": "^2.103.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
-    "@types/nodemailer": "^8.0.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
