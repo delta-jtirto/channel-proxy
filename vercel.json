@@ -1,0 +1,22 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/cron/cleanup-webhook-logs",
+      "schedule": "7 4 * * *"
+    },
+    {
+      "path": "/api/cron/renew-gmail-watches",
+      "schedule": "17 3 * * *"
+    },
+    {
+      "path": "/api/cron/renew-graph-subscriptions",
+      "schedule": "37 3 * * *"
+    }
+  ],
+  "functions": {
+    "app/api/workers/**": {
+      "maxDuration": 60
+    }
+  }
+}

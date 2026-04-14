@@ -1,0 +1,202 @@
+import { getServiceClient } from './supabase';
+import type { NormalizedMessage } from '@/lib/adapters/types';
+
+// ============================================================
+// Webhook Log
+// ============================================================
+
+export async function insertWebhookLog(
+  channel: string,
+  companyId: string | null,
+  rawPayload: unknown,
+) {
+  const supabase = getServiceClient();
+  const { error } = await supabase.from('webhook_logs').insert({
+    channel,
+    company_id: companyId,
+    raw_payload: rawPayload,
+    status: 'received',
+  });
+  if (error) console.error('Failed to insert webhook log:', error.message);
+}
+
+// ============================================================
+// Channel Account lookup
+// ============================================================
+
+export async function getChannelAccount(companyId: string, channel: string) {
+  const supabase = getServiceClient();
+  const { data, error } = await supabase
+    .from('channel_accounts')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('channel', channel)
+    .eq('is_active', true)
+    .single();
+
+  if (error || !data) return null;
+  return data;
+}
+
+// ============================================================
+// Contact upsert
+// ============================================================
+
+export async function upsertContact(
+  companyId: string,
+  channel: string,
+  channelContactId: string,
+  displayName: string | null,
+  avatarUrl: string | null,
+): Promise<string> {
+  const supabase = getServiceClient();
+
+  // Try to find existing contact
+  const { data: existing } = await supabase
+    .from('contacts')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('channel', channel)
+    .eq('channel_contact_id', channelContactId)
+    .single();
+
+  if (existing) {
+    // Update last_seen and name if available
+    await supabase
+      .from('contacts')
+      .update({
+        last_seen_at: new Date().toISOString(),
+        ...(displayName ? { display_name: displayName } : {}),
+        ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
+      })
+      .eq('id', existing.id);
+    return existing.id;
+  }
+
+  // Create new contact
+  const { data: newContact, error } = await supabase
+    .from('contacts')
+    .insert({
+      company_id: companyId,
+      channel,
+      channel_contact_id: channelContactId,
+      display_name: displayName,
+      avatar_url: avatarUrl,
+    })
+    .select('id')
+    .single();
+
+  if (error) throw new Error(`Failed to create contact: ${error.message}`);
+  return newContact!.id;
+}
+
+// ============================================================
+// Conversation upsert
+// ============================================================
+
+export async function upsertConversation(
+  companyId: string,
+  channel: string,
+  contactId: string,
+  accountId: string,
+  channelThreadId: string,
+  lastMessagePreview: string | null,
+  subject: string | null,
+): Promise<string> {
+  const supabase = getServiceClient();
+
+  // Try to find existing conversation by channel thread
+  const { data: existing } = await supabase
+    .from('conversations')
+    .select('id, message_count, unread_count')
+    .eq('company_id', companyId)
+    .eq('channel', channel)
+    .eq('contact_id', contactId)
+    .eq('account_id', accountId)
+    .maybeSingle();
+
+  const now = new Date().toISOString();
+
+  if (existing) {
+    await supabase
+      .from('conversations')
+      .update({
+        last_message_at: now,
+        last_message_preview: lastMessagePreview,
+        unread_count: (existing.unread_count ?? 0) + 1,
+        message_count: (existing.message_count ?? 0) + 1,
+        updated_at: now,
+        status: 'active',
+      })
+      .eq('id', existing.id);
+    return existing.id;
+  }
+
+  // Create new conversation
+  const { data: newConvo, error } = await supabase
+    .from('conversations')
+    .insert({
+      company_id: companyId,
+      channel,
+      contact_id: contactId,
+      account_id: accountId,
+      channel_thread_id: channelThreadId,
+      subject,
+      last_message_at: now,
+      last_message_preview: lastMessagePreview,
+      unread_count: 1,
+      message_count: 1,
+    })
+    .select('id')
+    .single();
+
+  if (error) throw new Error(`Failed to create conversation: ${error.message}`);
+  return newConvo!.id;
+}
+
+// ============================================================
+// Message insert (with idempotency)
+// ============================================================
+
+export async function insertMessage(
+  conversationId: string,
+  msg: NormalizedMessage,
+): Promise<{ id: string; isDuplicate: boolean }> {
+  const supabase = getServiceClient();
+
+  const { data, error } = await supabase
+    .from('messages')
+    .upsert(
+      {
+        conversation_id: conversationId,
+        company_id: msg.company_id,
+        channel: msg.channel,
+        direction: msg.direction,
+        sender_id: msg.channel_sender_id,
+        sender_name: msg.sender_name,
+        content_type: msg.content_type,
+        text_body: msg.text_body,
+        subject: msg.subject ?? null,
+        attachments: msg.attachments,
+        metadata: msg.metadata,
+        channel_message_id: msg.channel_message_id,
+        status: 'received',
+        idempotency_key: msg.idempotency_key,
+        channel_timestamp: msg.channel_timestamp,
+        received_at: new Date().toISOString(),
+      },
+      { onConflict: 'idempotency_key', ignoreDuplicates: true },
+    )
+    .select('id')
+    .single();
+
+  if (error) {
+    // If conflict (duplicate), that's fine -- it's idempotent
+    if (error.code === '23505' || error.message?.includes('duplicate')) {
+      return { id: '', isDuplicate: true };
+    }
+    throw new Error(`Failed to insert message: ${error.message}`);
+  }
+
+  return { id: data?.id ?? '', isDuplicate: false };
+}
