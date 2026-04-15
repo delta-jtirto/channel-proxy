@@ -12,11 +12,21 @@
     {
       "path": "/api/cron/renew-graph-subscriptions",
       "schedule": "37 3 * * *"
+    },
+    {
+      "path": "/api/cron/fetch-emails",
+      "schedule": "*/2 * * * *"
     }
   ],
   "functions": {
     "app/api/workers/**": {
       "maxDuration": 60
+    },
+    "app/api/proxy/email/fetch": {
+      "maxDuration": 30
+    },
+    "app/api/cron/fetch-emails": {
+      "maxDuration": 30
     }
   }
 }
