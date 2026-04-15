@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
   const supabase = getServiceClient();
   const { data, error } = await supabase
     .from('channel_accounts')
-    .select('id, company_id, channel, display_name, is_active, created_at, updated_at')
+    .select('id, company_id, channel, display_name, is_active, host_id, last_webhook_at, created_at, updated_at')
     .eq('company_id', companyId)
     .order('created_at');
 
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
   if ('error' in auth) return auth.error;
 
   const body = await req.json();
-  const { company_id, channel, display_name, credentials } = body;
+  const { company_id, channel, display_name, credentials, host_id } = body;
 
   if (!company_id || !channel || !display_name || !credentials) {
     return NextResponse.json(
@@ -71,8 +71,9 @@ export async function POST(req: NextRequest) {
       channel,
       display_name,
       credentials: encryptedCreds,
+      ...(host_id ? { host_id } : {}),
     })
-    .select('id, company_id, channel, display_name, is_active, created_at')
+    .select('id, company_id, channel, display_name, is_active, host_id, created_at')
     .single();
 
   if (error) {

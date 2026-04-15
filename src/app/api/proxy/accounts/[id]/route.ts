@@ -72,12 +72,13 @@ export async function PUT(
   if (body.display_name) updates.display_name = body.display_name;
   if (body.is_active !== undefined) updates.is_active = body.is_active;
   if (body.credentials) updates.credentials = encryptCredentials(body.credentials);
+  if (body.host_id !== undefined) updates.host_id = body.host_id || null;
 
   const { data, error } = await supabase
     .from('channel_accounts')
     .update(updates)
     .eq('id', id)
-    .select('id, company_id, channel, display_name, is_active, updated_at')
+    .select('id, company_id, channel, display_name, is_active, host_id, updated_at')
     .single();
 
   if (error) {
