@@ -15,7 +15,7 @@
     },
     {
       "path": "/api/cron/fetch-emails",
-      "schedule": "23 * * * *"
+      "schedule": "23 8 * * *"
     }
   ],
   "functions": {
