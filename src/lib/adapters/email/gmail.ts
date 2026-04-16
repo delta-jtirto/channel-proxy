@@ -148,6 +148,19 @@ function extractTextBody(payload: GmailPayload): string {
   return '';
 }
 
+function extractHtmlBody(payload: GmailPayload): string {
+  if (payload.mimeType === 'text/html' && payload.body?.data) {
+    return Buffer.from(payload.body.data, 'base64url').toString('utf8');
+  }
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      const html = extractHtmlBody(part);
+      if (html) return html;
+    }
+  }
+  return '';
+}
+
 export function parseGmailMessage(
   gmailMsg: { id?: string; threadId?: string; payload?: GmailPayload },
   companyId: string,
@@ -162,6 +175,7 @@ export function parseGmailMessage(
   const senderEmail = emailMatch[1] ?? from;
   const senderName = from.replace(/<.*?>/, '').trim() || senderEmail;
   const textBody = gmailMsg.payload ? extractTextBody(gmailMsg.payload) : '';
+  const htmlBody = gmailMsg.payload ? extractHtmlBody(gmailMsg.payload) : '';
 
   if (!senderEmail || !textBody) return null;
 
@@ -175,6 +189,7 @@ export function parseGmailMessage(
     sender_role: 'contact',
     content_type: 'text',
     text_body: textBody,
+    html_body: htmlBody || null,
     subject,
     attachments: [],
     metadata: {
@@ -293,6 +308,16 @@ const emailOutbound: OutboundAdapter = {
   },
 };
 
-registry.register(emailInbound, emailOutbound);
+// NOTE: Outbound email is now handled by the SMTP adapter at
+// src/lib/adapters/email/smtp.ts, which self-registers emailInbound
+// together with its SMTP-based send implementation. We no longer
+// register Gmail OAuth send here because the stored channel_accounts
+// credentials are SMTP/IMAP-shaped (email_address + password), not
+// OAuth refresh tokens. The inbound export below is still used by
+// smtp.ts (so it can register the inbound half) and by the Gmail
+// Pub/Sub webhook route. The OAuth helpers (exchangeGmailCode,
+// registerGmailWatch, fetchNewMessages, parseGmailMessage) remain
+// exported and are still used by the gmail-callback and renew
+// cron routes.
 
 export { emailInbound, emailOutbound };

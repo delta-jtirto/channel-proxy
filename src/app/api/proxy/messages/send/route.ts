@@ -9,7 +9,9 @@ import type { Channel } from '@/lib/adapters/types';
 import '@/lib/adapters/whatsapp';
 import '@/lib/adapters/instagram';
 import '@/lib/adapters/line';
-import '@/lib/adapters/email/gmail';
+// Email uses the SMTP outbound adapter (which also registers emailInbound).
+// Do NOT import gmail.ts directly — it no longer self-registers.
+import '@/lib/adapters/email/smtp';
 
 /**
  * POST /api/proxy/messages/send
@@ -22,7 +24,7 @@ export async function POST(req: NextRequest) {
   if ('error' in auth) return auth.error;
 
   const body = await req.json();
-  const { conversation_id, text, content_type, attachments } = body;
+  const { conversation_id, text, content_type, attachments, metadata } = body;
 
   if (!conversation_id || !text) {
     return NextResponse.json(
@@ -37,7 +39,7 @@ export async function POST(req: NextRequest) {
   const { data: convo } = await supabase
     .from('conversations')
     .select(`
-      id, company_id, channel, account_id,
+      id, company_id, channel, account_id, channel_thread_id, subject,
       contacts!inner (id, channel_contact_id, display_name)
     `)
     .eq('id', conversation_id)
@@ -79,17 +81,49 @@ export async function POST(req: NextRequest) {
   // Decrypt credentials and send
   const creds = decryptCredentials(account.credentials);
 
-  const contact = convo.contacts as unknown as {
+  const contactRaw = convo.contacts;
+  const contact = (Array.isArray(contactRaw) ? contactRaw[0] : contactRaw) as {
     id: string;
     channel_contact_id: string;
     display_name: string;
   };
 
-  const result = await adapter.send(
-    creds,
-    { conversation_id, text, content_type, attachments },
-    contact.channel_contact_id,
-  );
+  if (!contact?.channel_contact_id) {
+    return NextResponse.json({ error: 'Contact not found for this conversation' }, { status: 400 });
+  }
+
+  // Build channel-specific metadata (email needs thread ID and subject for replies)
+  const outboundMetadata: Record<string, unknown> = { ...metadata };
+  if (convo.channel === 'email') {
+    // SMTP adapter uses this as RFC 5322 In-Reply-To / References header.
+    // imap-fetch stores the original Message-ID header (wrapped in <...>)
+    // into conversations.channel_thread_id, so we forward it as-is.
+    if (convo.channel_thread_id && !outboundMetadata.in_reply_to_header) {
+      outboundMetadata.in_reply_to_header = convo.channel_thread_id;
+    }
+    // Kept for backwards-compat if Gmail OAuth send is ever reintroduced.
+    if (convo.channel_thread_id && !outboundMetadata.gmail_thread_id) {
+      outboundMetadata.gmail_thread_id = convo.channel_thread_id;
+    }
+    if (convo.subject && !outboundMetadata.subject) {
+      outboundMetadata.subject = convo.subject.startsWith('Re:')
+        ? convo.subject
+        : `Re: ${convo.subject}`;
+    }
+  }
+
+  let result: Awaited<ReturnType<typeof adapter.send>>;
+  try {
+    result = await adapter.send(
+      creds,
+      { conversation_id, text, content_type, attachments, metadata: outboundMetadata },
+      contact.channel_contact_id,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Send failed';
+    console.error('adapter.send threw:', message);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 
   if (result.status === 'failed') {
     return NextResponse.json(

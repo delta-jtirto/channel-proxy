@@ -164,6 +164,11 @@ export async function insertMessage(
 ): Promise<{ id: string; isDuplicate: boolean }> {
   const supabase = getServiceClient();
 
+  // NOTE: with `ignoreDuplicates: true`, a conflict on idempotency_key causes
+  // the row to be skipped silently and `.select('id')` returns 0 rows. Using
+  // `.single()` on that result errors with PGRST116, which the caller would
+  // then misinterpret as a real failure. `.maybeSingle()` returns null data
+  // instead, which we can treat as "duplicate — already stored".
   const { data, error } = await supabase
     .from('messages')
     .upsert(
@@ -176,6 +181,7 @@ export async function insertMessage(
         sender_name: msg.sender_name,
         content_type: msg.content_type,
         text_body: msg.text_body,
+        html_body: msg.html_body ?? null,
         subject: msg.subject ?? null,
         attachments: msg.attachments,
         metadata: msg.metadata,
@@ -188,15 +194,21 @@ export async function insertMessage(
       { onConflict: 'idempotency_key', ignoreDuplicates: true },
     )
     .select('id')
-    .single();
+    .maybeSingle();
 
   if (error) {
-    // If conflict (duplicate), that's fine -- it's idempotent
+    // A 23505 "duplicate key" error shouldn't happen with ignoreDuplicates=true,
+    // but keep the fallback check for safety.
     if (error.code === '23505' || error.message?.includes('duplicate')) {
       return { id: '', isDuplicate: true };
     }
     throw new Error(`Failed to insert message: ${error.message}`);
   }
 
-  return { id: data?.id ?? '', isDuplicate: false };
+  if (!data) {
+    // Row already existed — ignoreDuplicates swallowed it.
+    return { id: '', isDuplicate: true };
+  }
+
+  return { id: data.id, isDuplicate: false };
 }

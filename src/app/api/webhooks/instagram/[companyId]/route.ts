@@ -1,8 +1,13 @@
 import { type NextRequest } from 'next/server';
 import { instagramInbound } from '@/lib/adapters/instagram';
-import { getChannelAccount, insertWebhookLog } from '@/lib/db/queries';
+import {
+  getChannelAccount,
+  insertWebhookLog,
+  upsertContact,
+  upsertConversation,
+  insertMessage,
+} from '@/lib/db/queries';
 import { decryptCredentials } from '@/lib/credentials';
-import { enqueueWebhook } from '@/lib/queue';
 
 /** GET: Meta webhook verification challenge (same as WhatsApp). */
 export async function GET(
@@ -17,7 +22,13 @@ export async function GET(
   return instagramInbound.handleChallenge!(req, creds.verify_token as string);
 }
 
-/** POST: Instagram webhook — ack immediately, enqueue for processing. */
+/**
+ * POST: Instagram webhook — verify, then parse + persist inline.
+ *
+ * Processed synchronously (no QStash) to match the email webhook pattern.
+ * Meta requires a fast 200 ack; a few Supabase upserts comfortably fit.
+ * Errors are caught and logged so we still ack 200 and avoid retry storms.
+ */
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ companyId: string }> },
@@ -33,12 +44,31 @@ export async function POST(
   const body = await req.json();
   insertWebhookLog('instagram', companyId, body).catch(() => {});
 
-  enqueueWebhook({
-    channel: 'instagram',
-    companyId,
-    payload: body,
-    receivedAt: new Date().toISOString(),
-  }).catch((err) => console.error('Failed to enqueue Instagram webhook:', err));
+  try {
+    const normalized = instagramInbound.parseWebhook(body, companyId);
+    for (const msg of normalized) {
+      const contactId = await upsertContact(
+        companyId,
+        'instagram',
+        msg.channel_sender_id,
+        msg.sender_name,
+        null,
+      );
+      const conversationId = await upsertConversation(
+        companyId,
+        'instagram',
+        contactId,
+        account.id,
+        msg.channel_thread_id,
+        msg.text_body?.slice(0, 200) ?? null,
+        msg.subject ?? null,
+      );
+      await insertMessage(conversationId, msg);
+    }
+  } catch (err) {
+    // Always ack Meta with 200 to avoid retry storms; log for triage.
+    console.error('Instagram webhook processing failed:', err);
+  }
 
   return new Response('OK', { status: 200 });
 }

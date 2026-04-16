@@ -1,8 +1,13 @@
-import { NextResponse, type NextRequest } from 'next/server';
+import { type NextRequest } from 'next/server';
 import { whatsappInbound } from '@/lib/adapters/whatsapp';
-import { getChannelAccount, insertWebhookLog } from '@/lib/db/queries';
+import {
+  getChannelAccount,
+  insertWebhookLog,
+  upsertContact,
+  upsertConversation,
+  insertMessage,
+} from '@/lib/db/queries';
 import { decryptCredentials } from '@/lib/credentials';
-import { enqueueWebhook } from '@/lib/queue';
 
 /**
  * GET: Meta webhook verification challenge.
@@ -27,8 +32,12 @@ export async function GET(
 }
 
 /**
- * POST: Receive WhatsApp webhook.
- * Ack immediately (200 OK), then enqueue for background processing.
+ * POST: Receive WhatsApp webhook — verify, then parse + persist inline.
+ *
+ * Processed synchronously in the route handler (no QStash), matching the
+ * email webhook pattern. Meta requires a fast 200 ack, and a handful of
+ * Supabase upserts comfortably fit within that budget. Errors are caught
+ * and logged so we still ack 200 and avoid retry storms.
  */
 export async function POST(
   req: NextRequest,
@@ -57,15 +66,31 @@ export async function POST(
   // Log webhook (async, don't block response)
   insertWebhookLog('whatsapp', companyId, body).catch(() => {});
 
-  // Enqueue for background processing (async, don't block response)
-  enqueueWebhook({
-    channel: 'whatsapp',
-    companyId,
-    payload: body,
-    receivedAt: new Date().toISOString(),
-  }).catch((err) => {
-    console.error('Failed to enqueue WhatsApp webhook:', err);
-  });
+  try {
+    const normalized = whatsappInbound.parseWebhook(body, companyId);
+    for (const msg of normalized) {
+      const contactId = await upsertContact(
+        companyId,
+        'whatsapp',
+        msg.channel_sender_id,
+        msg.sender_name,
+        null,
+      );
+      const conversationId = await upsertConversation(
+        companyId,
+        'whatsapp',
+        contactId,
+        account.id,
+        msg.channel_thread_id,
+        msg.text_body?.slice(0, 200) ?? null,
+        msg.subject ?? null,
+      );
+      await insertMessage(conversationId, msg);
+    }
+  } catch (err) {
+    // Always ack Meta with 200 to avoid retry storms; log for triage.
+    console.error('WhatsApp webhook processing failed:', err);
+  }
 
   // Return 200 immediately — Meta requires fast response
   return new Response('OK', { status: 200 });

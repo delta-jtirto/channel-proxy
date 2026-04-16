@@ -3,11 +3,12 @@ import { verifyQStashSignature, type WebhookPayload } from '@/lib/queue';
 import { getChannelAccount, upsertContact, upsertConversation, insertMessage } from '@/lib/db/queries';
 import type { Channel, NormalizedMessage } from '@/lib/adapters/types';
 
-// Import all adapters to register them
+// Import all adapters to register them.
+// Email goes through the SMTP adapter, which also wires up emailInbound.
 import '@/lib/adapters/whatsapp';
 import '@/lib/adapters/instagram';
 import '@/lib/adapters/line';
-import '@/lib/adapters/email/gmail';
+import '@/lib/adapters/email/smtp';
 import { registry } from '@/lib/adapters/registry';
 
 /**
