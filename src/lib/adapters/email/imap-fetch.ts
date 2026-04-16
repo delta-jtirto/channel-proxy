@@ -75,11 +75,13 @@ export async function fetchUnreadEmails(
         const date = envelope.date ? new Date(envelope.date).toISOString() : new Date().toISOString();
         const inReplyTo = envelope.inReplyTo || undefined;
 
-        // Extract plain text body from source
+        // Extract plain text and HTML body from source
         let textBody = '';
+        let htmlBody: string | null = null;
         if (msg.source) {
           const raw = msg.source.toString('utf-8');
           textBody = extractPlainText(raw);
+          htmlBody = extractHtmlContent(raw) || null;
         }
 
         // Skip if no meaningful content
@@ -101,6 +103,7 @@ export async function fetchUnreadEmails(
           sender_role: 'contact',
           content_type: 'text',
           text_body: textBody || subject,
+          html_body: htmlBody,
           subject,
           attachments: [],
           metadata: {
@@ -137,6 +140,39 @@ export async function fetchUnreadEmails(
   }
 
   return messages;
+}
+
+/**
+ * Extract the text/html part from a raw MIME email.
+ */
+function extractHtmlContent(raw: string): string {
+  const boundaryMatch = raw.match(/boundary="?([^"\r\n]+)"?/i);
+  if (boundaryMatch) {
+    const boundary = boundaryMatch[1];
+    const parts = raw.split(`--${boundary}`);
+    for (const part of parts) {
+      if (part.toLowerCase().includes('content-type: text/html')) {
+        const bodyStart = part.indexOf('\r\n\r\n');
+        if (bodyStart !== -1) {
+          let body = part.substring(bodyStart + 4).trim();
+          if (part.toLowerCase().includes('content-transfer-encoding: base64')) {
+            try { body = Buffer.from(body.replace(/\s/g, ''), 'base64').toString('utf-8'); } catch {}
+          }
+          if (part.toLowerCase().includes('content-transfer-encoding: quoted-printable')) {
+            body = body.replace(/=\r?\n/g, '').replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+          }
+          return body.trim();
+        }
+      }
+    }
+  }
+  // Single-part HTML-only email
+  const bodyStart = raw.indexOf('\r\n\r\n');
+  if (bodyStart !== -1) {
+    const body = raw.substring(bodyStart + 4).trim();
+    if (body.includes('<html') || body.includes('<body')) return body;
+  }
+  return '';
 }
 
 /**

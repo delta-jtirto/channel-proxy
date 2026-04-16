@@ -7,6 +7,7 @@ import {
   upsertConversation,
   insertMessage,
 } from '@/lib/db/queries';
+import { getServiceClient } from '@/lib/db/supabase';
 import { decryptCredentials } from '@/lib/credentials';
 import { registry } from '@/lib/adapters/registry';
 
@@ -107,6 +108,15 @@ export async function POST(
         msg.subject ?? null,
       );
       await insertMessage(conversationId, msg);
+    }
+
+    // Mark channel as connected (first webhook received)
+    if (normalized.length > 0 && !account.last_webhook_at) {
+      getServiceClient()
+        .from('channel_accounts')
+        .update({ last_webhook_at: new Date().toISOString() })
+        .eq('id', account.id)
+        .then(() => {});
     }
   } catch (err) {
     // Always ack LINE with 200 so it doesn't retry-storm on transient DB

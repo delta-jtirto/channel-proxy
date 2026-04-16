@@ -49,6 +49,7 @@ export interface NormalizedMessage {
   // Content
   content_type: MessageContentType;
   text_body: string | null;
+  html_body?: string | null; // email HTML body (email channel only)
   subject?: string | null; // email subject
   attachments: Attachment[];
   metadata: Record<string, unknown>; // channel-specific extras

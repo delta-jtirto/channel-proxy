@@ -7,6 +7,7 @@ import {
   upsertConversation,
   insertMessage,
 } from '@/lib/db/queries';
+import { getServiceClient } from '@/lib/db/supabase';
 import { decryptCredentials } from '@/lib/credentials';
 
 /** GET: Meta webhook verification challenge (same as WhatsApp). */
@@ -64,6 +65,15 @@ export async function POST(
         msg.subject ?? null,
       );
       await insertMessage(conversationId, msg);
+    }
+
+    // Mark channel as connected (first webhook received)
+    if (normalized.length > 0 && !account.last_webhook_at) {
+      getServiceClient()
+        .from('channel_accounts')
+        .update({ last_webhook_at: new Date().toISOString() })
+        .eq('id', account.id)
+        .then(() => {});
     }
   } catch (err) {
     // Always ack Meta with 200 to avoid retry storms; log for triage.
