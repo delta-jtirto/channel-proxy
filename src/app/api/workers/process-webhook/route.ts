@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { verifyQStashSignature, type WebhookPayload } from '@/lib/queue';
-import { getChannelAccount, upsertContact, upsertConversation, insertMessage } from '@/lib/db/queries';
+import { getChannelAccount, upsertContact, upsertConversation, insertMessage, incrementConversationCounts } from '@/lib/db/queries';
 import type { Channel, NormalizedMessage } from '@/lib/adapters/types';
 
 // Import all adapters to register them.
@@ -117,4 +117,7 @@ async function processMessage(msg: NormalizedMessage, accountId: string) {
   if (isDuplicate) {
     throw new Error('duplicate');
   }
+
+  // 4. Increment unread/message counts for the conversation
+  await incrementConversationCounts(conversationId);
 }

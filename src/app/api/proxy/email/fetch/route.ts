@@ -3,7 +3,7 @@ import { authenticateRequest, getUserCompanyIds } from '@/lib/auth/middleware';
 import { getServiceClient } from '@/lib/db/supabase';
 import { decryptCredentials } from '@/lib/credentials';
 import { fetchUnreadEmails } from '@/lib/adapters/email/imap-fetch';
-import { upsertContact, upsertConversation, insertMessage } from '@/lib/db/queries';
+import { upsertContact, upsertConversation, insertMessage, incrementConversationCounts } from '@/lib/db/queries';
 
 /**
  * POST /api/proxy/email/fetch
@@ -101,6 +101,9 @@ export async function POST(req: NextRequest) {
         duplicates++;
       } else {
         stored++;
+        // Increment unread/message counts only for genuinely new messages
+        // so the frontend poll detects the change and triggers auto-reply
+        await incrementConversationCounts(conversationId);
       }
     }
 

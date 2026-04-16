@@ -123,8 +123,6 @@ export async function upsertConversation(
       .update({
         last_message_at: now,
         last_message_preview: lastMessagePreview,
-        unread_count: (existing.unread_count ?? 0) + 1,
-        message_count: (existing.message_count ?? 0) + 1,
         updated_at: now,
         status: 'active',
       })
@@ -211,4 +209,26 @@ export async function insertMessage(
   }
 
   return { id: data.id, isDuplicate: false };
+}
+
+// ============================================================
+// Conversation count increment (call after confirmed new message)
+// ============================================================
+
+export async function incrementConversationCounts(conversationId: string) {
+  const supabase = getServiceClient();
+  const { data: conv } = await supabase
+    .from('conversations')
+    .select('unread_count, message_count')
+    .eq('id', conversationId)
+    .single();
+  if (conv) {
+    await supabase
+      .from('conversations')
+      .update({
+        unread_count: (conv.unread_count ?? 0) + 1,
+        message_count: (conv.message_count ?? 0) + 1,
+      })
+      .eq('id', conversationId);
+  }
 }

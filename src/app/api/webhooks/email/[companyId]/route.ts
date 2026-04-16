@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { getChannelAccount, insertWebhookLog, upsertContact, upsertConversation, insertMessage } from '@/lib/db/queries';
+import { getChannelAccount, insertWebhookLog, upsertContact, upsertConversation, insertMessage, incrementConversationCounts } from '@/lib/db/queries';
 import { decryptCredentials } from '@/lib/credentials';
 import { fetchNewMessages, parseGmailMessage } from '@/lib/adapters/email/gmail';
 
@@ -74,7 +74,10 @@ export async function POST(
       );
 
       const { isDuplicate } = await insertMessage(conversationId, normalized);
-      if (!isDuplicate) processed++;
+      if (!isDuplicate) {
+        processed++;
+        await incrementConversationCounts(conversationId);
+      }
     }
 
     return NextResponse.json({ processed });

@@ -6,6 +6,7 @@ import {
   upsertContact,
   upsertConversation,
   insertMessage,
+  incrementConversationCounts,
 } from '@/lib/db/queries';
 import { getServiceClient } from '@/lib/db/supabase';
 import { decryptCredentials } from '@/lib/credentials';
@@ -64,7 +65,8 @@ export async function POST(
         msg.text_body?.slice(0, 200) ?? null,
         msg.subject ?? null,
       );
-      await insertMessage(conversationId, msg);
+      const { isDuplicate } = await insertMessage(conversationId, msg);
+      if (!isDuplicate) await incrementConversationCounts(conversationId);
     }
 
     // Mark channel as connected (first webhook received)
