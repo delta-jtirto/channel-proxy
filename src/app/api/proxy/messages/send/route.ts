@@ -133,6 +133,12 @@ export async function POST(req: NextRequest) {
   }
 
   // Store the outbound message
+  // If the client signals this is a bot auto-reply (metadata.source === 'bot'),
+  // use a 'bot:' prefixed sender_id so consumers can render it differently.
+  const isBot = metadata?.source === 'bot';
+  const senderId = isBot ? 'bot:auto-reply' : `company:${auth.user.id}`;
+  const senderName = isBot ? 'AI Auto-Reply' : auth.user.email;
+
   const now = new Date().toISOString();
   const { data: message, error: insertError } = await supabase
     .from('messages')
@@ -141,11 +147,12 @@ export async function POST(req: NextRequest) {
       company_id: convo.company_id,
       channel: convo.channel,
       direction: 'outbound',
-      sender_id: `company:${auth.user.id}`,
-      sender_name: auth.user.email,
+      sender_id: senderId,
+      sender_name: senderName,
       content_type: content_type ?? 'text',
       text_body: text,
       attachments: attachments ?? [],
+      metadata: metadata ?? {},
       channel_message_id: result.channel_message_id,
       status: result.status,
       idempotency_key: `outbound_${result.channel_message_id}`,
