@@ -5,31 +5,135 @@ import { decryptCredentials } from '@/lib/credentials';
 import { fetchUnreadEmails } from '@/lib/adapters/email/imap-fetch';
 import { upsertContact, upsertConversation, insertMessage, incrementConversationCounts } from '@/lib/db/queries';
 
+type EmailCreds = {
+  email_address: string;
+  password: string;
+  imap_host: string;
+  imap_port: string;
+  provider: string;
+};
+
+type FetchResult = {
+  company_id: string;
+  email: string;
+  fetched: number;
+  stored: number;
+  duplicates: number;
+  error?: string;
+};
+
+// Pulls unread mail for a single connected account and inserts into the
+// messages table with idempotency. Shared between the single-company and
+// {all:true} system-cron paths below.
+async function fetchOneAccount(
+  account: { id: string; company_id: string; credentials: string },
+  supabase: ReturnType<typeof getServiceClient>,
+): Promise<FetchResult> {
+  const creds = decryptCredentials(account.credentials) as unknown as EmailCreds;
+  const base = {
+    company_id: account.company_id,
+    email: creds.email_address || '?',
+    fetched: 0,
+    stored: 0,
+    duplicates: 0,
+  };
+
+  if (!creds.email_address || !creds.password || !creds.imap_host) {
+    return { ...base, error: 'Incomplete credentials' };
+  }
+
+  const emails = await fetchUnreadEmails(creds, account.company_id);
+  let stored = 0;
+  let duplicates = 0;
+
+  for (const msg of emails) {
+    const contactId = await upsertContact(
+      account.company_id, 'email', msg.channel_sender_id, msg.sender_name, null,
+    );
+    const conversationId = await upsertConversation(
+      account.company_id, 'email', contactId, account.id,
+      msg.channel_thread_id, msg.text_body?.slice(0, 200) ?? null, msg.subject ?? null,
+    );
+    const { isDuplicate } = await insertMessage(conversationId, msg);
+    if (isDuplicate) duplicates++;
+    else { stored++; await incrementConversationCounts(conversationId); }
+  }
+
+  if (stored > 0) {
+    await supabase
+      .from('channel_accounts')
+      .update({ last_webhook_at: new Date().toISOString() })
+      .eq('id', account.id);
+  }
+
+  return { ...base, fetched: emails.length, stored, duplicates };
+}
+
 /**
  * POST /api/proxy/email/fetch
- * Manually trigger email fetch for a company's email account.
- * Connects to IMAP, fetches unread emails, stores in Supabase.
  *
- * Body: { company_id }
- * Also callable by CRON (with CRON_SECRET auth).
+ * Three auth paths:
+ *   1. User JWT              — manual refresh from the app; body: { company_id }
+ *   2. x-cron-secret header  — legacy Vercel-Cron style; body: { company_id }
+ *   3. Authorization: Bearer <CRON_SHARED_SECRET> — Supabase pg_cron.
+ *      With body { all: true } iterates every active email account; with
+ *      { company_id } behaves like path 2.
  */
 export async function POST(req: NextRequest) {
-  // Allow both user auth and CRON secret auth
-  const cronSecret = req.headers.get('x-cron-secret');
-  let companyId: string;
+  const body: { company_id?: string; all?: boolean } = await req.json().catch(() => ({}));
 
-  if (cronSecret === process.env.CRON_SECRET) {
-    // CRON call — company_id from body
-    const body = await req.json();
+  const authHeader = req.headers.get('authorization');
+  const xCronSecret = req.headers.get('x-cron-secret');
+  const sharedSecret = process.env.CRON_SHARED_SECRET;
+
+  const isSystemCron =
+    !!sharedSecret && authHeader === `Bearer ${sharedSecret}`;
+  const isLegacyCron = xCronSecret === process.env.CRON_SECRET;
+
+  const supabase = getServiceClient();
+
+  // ── System-cron batch mode: iterate every active email account ────────
+  if (isSystemCron && body.all === true) {
+    const { data: accounts, error } = await supabase
+      .from('channel_accounts')
+      .select('id, company_id, credentials')
+      .eq('channel', 'email')
+      .eq('is_active', true);
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    if (!accounts?.length) {
+      return NextResponse.json({ accounts: 0, results: [] });
+    }
+
+    const results: FetchResult[] = [];
+    for (const account of accounts) {
+      try {
+        results.push(await fetchOneAccount(account, supabase));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        results.push({
+          company_id: account.company_id, email: '?',
+          fetched: 0, stored: 0, duplicates: 0, error: message,
+        });
+      }
+    }
+
+    const totalStored = results.reduce((n, r) => n + r.stored, 0);
+    return NextResponse.json({ accounts: accounts.length, stored: totalStored, results });
+  }
+
+  // ── Single-company path (user, legacy cron, or system-cron w/out all) ─
+  let companyId: string | undefined;
+
+  if (isSystemCron || isLegacyCron) {
     companyId = body.company_id;
   } else {
-    // User call — verify auth
     const auth = await authenticateRequest(req);
     if ('error' in auth) return auth.error;
 
-    const body = await req.json();
     companyId = body.company_id;
-
     if (!companyId) {
       return NextResponse.json({ error: 'company_id required' }, { status: 400 });
     }
@@ -40,12 +144,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const supabase = getServiceClient();
+  if (!companyId) {
+    return NextResponse.json({ error: 'company_id required' }, { status: 400 });
+  }
 
-  // Get the email channel account
   const { data: account } = await supabase
     .from('channel_accounts')
-    .select('id, credentials')
+    .select('id, company_id, credentials')
     .eq('company_id', companyId)
     .eq('channel', 'email')
     .eq('is_active', true)
@@ -55,77 +160,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No active email account for this company' }, { status: 404 });
   }
 
-  const creds = decryptCredentials(account.credentials) as {
-    email_address: string;
-    password: string;
-    imap_host: string;
-    imap_port: string;
-    provider: string;
-  };
-
-  if (!creds.email_address || !creds.password || !creds.imap_host) {
-    return NextResponse.json({ error: 'Incomplete email credentials' }, { status: 400 });
-  }
-
   try {
-    // Fetch unread emails via IMAP
-    const emails = await fetchUnreadEmails(creds, companyId);
-
-    let stored = 0;
-    let duplicates = 0;
-
-    for (const msg of emails) {
-      // Upsert contact
-      const contactId = await upsertContact(
-        companyId,
-        'email',
-        msg.channel_sender_id,
-        msg.sender_name,
-        null,
-      );
-
-      // Upsert conversation (threaded by email thread ID)
-      const conversationId = await upsertConversation(
-        companyId,
-        'email',
-        contactId,
-        account.id,
-        msg.channel_thread_id,
-        msg.text_body?.slice(0, 200) ?? null,
-        msg.subject ?? null,
-      );
-
-      // Insert message (idempotent)
-      const { isDuplicate } = await insertMessage(conversationId, msg);
-      if (isDuplicate) {
-        duplicates++;
-      } else {
-        stored++;
-        // Increment unread/message counts only for genuinely new messages
-        // so the frontend poll detects the change and triggers auto-reply
-        await incrementConversationCounts(conversationId);
-      }
-    }
-
-    // Update last_webhook_at to mark as verified
-    if (stored > 0) {
-      await supabase
-        .from('channel_accounts')
-        .update({ last_webhook_at: new Date().toISOString() })
-        .eq('id', account.id);
-    }
-
-    return NextResponse.json({
-      fetched: emails.length,
-      stored,
-      duplicates,
-      email: creds.email_address,
-    });
+    const result = await fetchOneAccount(account, supabase);
+    return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     console.error('IMAP fetch failed:', message);
 
-    // Return specific error for common IMAP issues
     if (message.includes('Invalid credentials') || message.includes('AUTHENTICATIONFAILED')) {
       return NextResponse.json(
         { error: 'Invalid email credentials. Check your app password.' },
