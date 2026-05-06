@@ -2,7 +2,7 @@
 // Channel Adapter Interfaces & Shared Types
 // ============================================================
 
-export type Channel = 'whatsapp' | 'instagram' | 'line' | 'email' | 'telegram';
+export type Channel = 'whatsapp' | 'instagram' | 'line' | 'email' | 'telegram' | 'wati';
 
 export type MessageDirection = 'inbound' | 'outbound';
 

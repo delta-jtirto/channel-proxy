@@ -7,6 +7,7 @@ import type { Channel } from '@/lib/adapters/types';
 
 // Import all adapters to register them
 import '@/lib/adapters/whatsapp';
+import '@/lib/adapters/wati';
 import '@/lib/adapters/instagram';
 import '@/lib/adapters/line';
 // Email uses the SMTP outbound adapter (which also registers emailInbound).
