@@ -41,6 +41,7 @@ interface LineMessage {
   title?: string;
   packageId?: string;
   stickerId?: string;
+  stickerResourceType?: string; // STATIC | ANIMATION | SOUND | ANIMATION_SOUND | POPUP | POPUP_SOUND | NAME_TEXT | PER_STICKER_TEXT
 }
 
 // ============================================================
@@ -93,7 +94,7 @@ const lineInbound: InboundAdapter = {
           line_message_type: msg.type,
           reply_token: event.replyToken,
           webhook_event_id: event.webhookEventId,
-          ...(msg.packageId ? { sticker_package_id: msg.packageId, sticker_id: msg.stickerId } : {}),
+          ...(msg.packageId ? { sticker_package_id: msg.packageId, sticker_id: msg.stickerId, sticker_resource_type: msg.stickerResourceType } : {}),
           ...(msg.latitude != null ? { location: { latitude: msg.latitude, longitude: msg.longitude, address: msg.address, title: msg.title } } : {}),
         },
         channel_message_id: msg.id,
@@ -120,8 +121,26 @@ function mapLineType(type: string): MessageContentType {
 }
 
 function buildLineAttachments(msg: LineMessage) {
-  if (msg.type === 'text' || msg.type === 'location' || msg.type === 'sticker') {
+  if (msg.type === 'text' || msg.type === 'location') {
     return [];
+  }
+
+  if (msg.type === 'sticker') {
+    if (!msg.stickerId) return [];
+    // LINE sticker CDN — public, no auth required.
+    // Animated resource types render as APNG; static stickers render as PNG.
+    const animated = new Set(['ANIMATION', 'ANIMATION_SOUND', 'POPUP', 'POPUP_SOUND']);
+    const url = animated.has(msg.stickerResourceType ?? '')
+      ? `https://stickershop.line-scdn.net/stickershop/v1/sticker/${msg.stickerId}/iPhone/sticker_animation@2x.png`
+      : `https://stickershop.line-scdn.net/stickershop/v1/sticker/${msg.stickerId}/android/sticker.png`;
+    return [
+      {
+        type: 'image',
+        mime_type: 'image/png',
+        url,
+        filename: `sticker_${msg.stickerId}.png`,
+      },
+    ];
   }
 
   // For media messages, the content is fetched via LINE Content API
