@@ -8,6 +8,8 @@ import type {
   SendResult,
   Attachment,
   MessageContentType,
+  StatusUpdate,
+  MessageStatus,
 } from './types';
 import { registry } from './registry';
 
@@ -65,6 +67,7 @@ interface WhatsAppStatus {
   status: string;
   timestamp: string;
   recipient_id: string;
+  errors?: { code: number; title?: string; message?: string }[];
 }
 
 // ============================================================
@@ -143,7 +146,43 @@ const whatsappInbound: InboundAdapter = {
 
     return messages;
   },
+
+  parseStatuses(body: unknown): StatusUpdate[] {
+    const data = body as WhatsAppWebhookBody;
+    if (data.object !== 'whatsapp_business_account') return [];
+
+    const updates: StatusUpdate[] = [];
+    for (const entry of data.entry ?? []) {
+      for (const change of entry.changes ?? []) {
+        if (change.field !== 'messages') continue;
+        for (const s of change.value.statuses ?? []) {
+          const mapped = mapWhatsAppStatus(s.status);
+          if (!mapped) continue;
+          const errMsg = s.errors?.length
+            ? s.errors.map(e => `[${e.code}] ${e.title ?? e.message ?? ''}`.trim()).join('; ')
+            : undefined;
+          updates.push({
+            channel_message_id: s.id,
+            status: mapped,
+            error_message: errMsg,
+            channel_timestamp: new Date(parseInt(s.timestamp, 10) * 1000).toISOString(),
+          });
+        }
+      }
+    }
+    return updates;
+  },
 };
+
+function mapWhatsAppStatus(s: string): MessageStatus | null {
+  switch (s) {
+    case 'sent': return 'sent';
+    case 'delivered': return 'delivered';
+    case 'read': return 'read';
+    case 'failed': return 'failed';
+    default: return null;
+  }
+}
 
 function mapWhatsAppType(type: string): MessageContentType {
   const map: Record<string, MessageContentType> = {

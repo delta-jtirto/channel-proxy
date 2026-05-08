@@ -7,6 +7,7 @@ import {
   upsertConversation,
   insertMessage,
   incrementConversationCounts,
+  updateMessageStatusByChannelId,
 } from '@/lib/db/queries';
 import { getServiceClient } from '@/lib/db/supabase';
 import { decryptCredentials } from '@/lib/credentials';
@@ -91,8 +92,22 @@ export async function POST(
       if (!isDuplicate) await incrementConversationCounts(conversationId);
     }
 
+    // Apply delivery-status updates for previously-sent outbound messages.
+    // Meta sends sent/delivered/read/failed events on the same `messages`
+    // webhook field, just inside value.statuses[] instead of value.messages[].
+    // Critical for catching policy errors like 130497 (country restriction)
+    // that return 200 from the send API but actually fail downstream.
+    const statusUpdates = whatsappInbound.parseStatuses?.(body, companyId) ?? [];
+    for (const upd of statusUpdates) {
+      await updateMessageStatusByChannelId(
+        upd.channel_message_id,
+        upd.status,
+        upd.error_message,
+      );
+    }
+
     // Mark channel as connected (first webhook received)
-    if (normalized.length > 0 && !account.last_webhook_at) {
+    if ((normalized.length > 0 || statusUpdates.length > 0) && !account.last_webhook_at) {
       getServiceClient()
         .from('channel_accounts')
         .update({ last_webhook_at: new Date().toISOString() })

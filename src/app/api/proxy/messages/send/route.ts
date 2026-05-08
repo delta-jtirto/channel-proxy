@@ -141,6 +141,14 @@ export async function POST(req: NextRequest) {
   const senderName = isBot ? 'AI Auto-Reply' : auth.user.email;
 
   const now = new Date().toISOString();
+  // Forward the frontend-generated client_message_id so it can dedupe its
+  // optimistic bubble against this row when Realtime fires. Sourced from the
+  // body metadata (set by proxy-send.ts) or the Idempotency-Key header.
+  const clientMessageId =
+    (metadata?.client_message_id as string | undefined) ??
+    req.headers.get('idempotency-key') ??
+    null;
+
   const { data: message, error: insertError } = await supabase
     .from('messages')
     .insert({
@@ -155,6 +163,7 @@ export async function POST(req: NextRequest) {
       attachments: attachments ?? [],
       metadata: metadata ?? {},
       channel_message_id: result.channel_message_id,
+      client_message_id: clientMessageId,
       status: result.status,
       idempotency_key: `outbound_${result.channel_message_id}`,
       channel_timestamp: now,

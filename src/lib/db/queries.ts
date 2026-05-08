@@ -215,6 +215,46 @@ export async function insertMessage(
 // Conversation count increment (call after confirmed new message)
 // ============================================================
 
+/**
+ * Apply a delivery-status update to a previously-sent outbound message.
+ * Matches by `channel_message_id` (the provider's message id, e.g. wamid.xxx).
+ *
+ * Idempotent and monotonic: never downgrades 'read' → 'delivered'. Skips the
+ * write when the new status equals the current to keep WAL traffic minimal.
+ */
+const STATUS_RANK: Record<string, number> = {
+  received: 0,
+  sent: 1,
+  delivered: 2,
+  read: 3,
+  failed: 4, // failed wins over any positive state since it's terminal
+};
+
+export async function updateMessageStatusByChannelId(
+  channelMessageId: string,
+  status: string,
+  errorMessage?: string,
+): Promise<void> {
+  if (!channelMessageId) return;
+  const supabase = getServiceClient();
+  const { data: existing } = await supabase
+    .from('messages')
+    .select('id, status')
+    .eq('channel_message_id', channelMessageId)
+    .single();
+  if (!existing) return;
+  const currentRank = STATUS_RANK[existing.status] ?? 0;
+  const incomingRank = STATUS_RANK[status] ?? 0;
+  if (incomingRank <= currentRank && status !== 'failed') return;
+  await supabase
+    .from('messages')
+    .update({
+      status,
+      ...(errorMessage ? { error_message: errorMessage } : {}),
+    })
+    .eq('id', existing.id);
+}
+
 export async function incrementConversationCounts(conversationId: string) {
   const supabase = getServiceClient();
   const { data: conv } = await supabase

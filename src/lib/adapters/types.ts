@@ -82,6 +82,18 @@ export interface DecryptedCredentials {
 // Adapter Interfaces
 // ============================================================
 
+/** Delivery status update for an outbound message we previously sent.
+ *  Channels that report delivery state (WhatsApp, Wati) emit these alongside
+ *  inbound messages on the same webhook. We use them to flip the row from
+ *  'sent' (= accepted by API) to 'delivered'/'read'/'failed' (= reality). */
+export interface StatusUpdate {
+  channel_message_id: string;
+  status: MessageStatus;
+  error_message?: string;
+  /** Provider event timestamp (ISO). For ordering when multiple updates race. */
+  channel_timestamp: string;
+}
+
 export interface InboundAdapter {
   channel: Channel;
 
@@ -90,6 +102,10 @@ export interface InboundAdapter {
 
   /** Parse a webhook payload into normalized messages. */
   parseWebhook(body: unknown, companyId: string): NormalizedMessage[];
+
+  /** Parse delivery-status events for previously-sent outbound messages.
+   *  Optional — only WhatsApp and Wati emit these. */
+  parseStatuses?(body: unknown, companyId: string): StatusUpdate[];
 
   /** Handle a webhook verification challenge (Meta GET requests). */
   handleChallenge?(req: Request, verifyToken: string): Response;

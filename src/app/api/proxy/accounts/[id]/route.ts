@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { authenticateRequest, getUserCompanyIds } from '@/lib/auth/middleware';
 import { getServiceClient } from '@/lib/db/supabase';
-import { encryptCredentials } from '@/lib/credentials';
+import { encryptCredentials, decryptCredentials } from '@/lib/credentials';
 
 /**
  * GET /api/proxy/accounts/:id
@@ -49,10 +49,10 @@ export async function PUT(
 
   const supabase = getServiceClient();
 
-  // Get existing account to verify access
+  // Get existing account to verify access AND for credentials_patch merging
   const { data: existing } = await supabase
     .from('channel_accounts')
-    .select('company_id')
+    .select('company_id, credentials')
     .eq('id', id)
     .single();
 
@@ -71,8 +71,19 @@ export async function PUT(
 
   if (body.display_name) updates.display_name = body.display_name;
   if (body.is_active !== undefined) updates.is_active = body.is_active;
-  if (body.credentials) updates.credentials = encryptCredentials(body.credentials);
   if (body.host_id !== undefined) updates.host_id = body.host_id || null;
+
+  // Full replacement: body.credentials = full new creds object (legacy path)
+  if (body.credentials) updates.credentials = encryptCredentials(body.credentials);
+
+  // Partial update: body.credentials_patch = { access_token: 'new...' }
+  // Decrypt existing creds, merge patch, re-encrypt. Lets the UI rotate
+  // a single field (e.g. expired access token) without re-pasting all 5.
+  if (body.credentials_patch && typeof body.credentials_patch === 'object') {
+    const current = decryptCredentials(existing.credentials);
+    const merged = { ...current, ...body.credentials_patch };
+    updates.credentials = encryptCredentials(merged);
+  }
 
   const { data, error } = await supabase
     .from('channel_accounts')
