@@ -4,6 +4,10 @@ import { getUserClient } from '@/lib/db/supabase';
 export interface AuthUser {
   id: string;
   email: string;
+  /** Raw app_metadata from the JWT. Authoritative for non-BPO product
+   *  claims (e.g. Support's `workspace_id`). Optional because BPO users
+   *  don't necessarily carry one. */
+  app_metadata?: Record<string, unknown>;
 }
 
 /**
@@ -44,8 +48,18 @@ export async function authenticateRequest(
     user: {
       id: user.id,
       email: user.email ?? '',
+      app_metadata: user.app_metadata as Record<string, unknown> | undefined,
     },
   };
+}
+
+/**
+ * Read the Support workspace claim from a user's app_metadata. Returns
+ * null if the claim is missing — the user isn't a Support operator.
+ */
+export function getSupportWorkspaceId(user: AuthUser): string | null {
+  const raw = user.app_metadata?.workspace_id;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
 
 /**

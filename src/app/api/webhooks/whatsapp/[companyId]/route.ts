@@ -11,6 +11,7 @@ import {
 } from '@/lib/db/queries';
 import { getServiceClient } from '@/lib/db/supabase';
 import { decryptCredentials } from '@/lib/credentials';
+import { forwardInboundToSupport } from '@/lib/forwarders/support';
 
 /**
  * GET: Meta webhook verification challenge.
@@ -90,6 +91,10 @@ export async function POST(
       );
       const { isDuplicate } = await insertMessage(conversationId, msg);
       if (!isDuplicate) await incrementConversationCounts(conversationId);
+      // Fire-and-forget forward to Support if this account is routed
+      // there. Skipped for duplicates so the Support inbox doesn't
+      // see the same message twice when Meta retries.
+      if (!isDuplicate) forwardInboundToSupport({ account, msg, conversationId });
     }
 
     // Apply delivery-status updates for previously-sent outbound messages.

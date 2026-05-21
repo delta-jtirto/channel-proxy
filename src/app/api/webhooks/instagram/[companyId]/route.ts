@@ -10,6 +10,7 @@ import {
 } from '@/lib/db/queries';
 import { getServiceClient } from '@/lib/db/supabase';
 import { decryptCredentials } from '@/lib/credentials';
+import { forwardInboundToSupport } from '@/lib/forwarders/support';
 
 /** GET: Meta webhook verification challenge (same as WhatsApp). */
 export async function GET(
@@ -67,6 +68,7 @@ export async function POST(
       );
       const { isDuplicate } = await insertMessage(conversationId, msg);
       if (!isDuplicate) await incrementConversationCounts(conversationId);
+      if (!isDuplicate) forwardInboundToSupport({ account, msg, conversationId });
     }
 
     // Mark channel as connected (first webhook received)

@@ -1,9 +1,14 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { authenticateRequest, getUserCompanyIds } from '@/lib/auth/middleware';
+import {
+  authenticateRequest,
+  getSupportWorkspaceId,
+  getUserCompanyIds,
+} from '@/lib/auth/middleware';
 import { getServiceClient } from '@/lib/db/supabase';
 import { decryptCredentials } from '@/lib/credentials';
 import { fetchUnreadEmails } from '@/lib/adapters/email/imap-fetch';
 import { upsertContact, upsertConversation, insertMessage, incrementConversationCounts } from '@/lib/db/queries';
+import { forwardInboundToSupport } from '@/lib/forwarders/support';
 
 type EmailCreds = {
   email_address: string;
@@ -26,7 +31,12 @@ type FetchResult = {
 // messages table with idempotency. Shared between the single-company and
 // {all:true} system-cron paths below.
 async function fetchOneAccount(
-  account: { id: string; company_id: string; credentials: string },
+  account: {
+    id: string;
+    company_id: string;
+    credentials: string;
+    delivery_target?: string | null;
+  },
   supabase: ReturnType<typeof getServiceClient>,
 ): Promise<FetchResult> {
   const creds = decryptCredentials(account.credentials) as unknown as EmailCreds;
@@ -56,7 +66,15 @@ async function fetchOneAccount(
     );
     const { isDuplicate } = await insertMessage(conversationId, msg);
     if (isDuplicate) duplicates++;
-    else { stored++; await incrementConversationCounts(conversationId); }
+    else {
+      stored++;
+      await incrementConversationCounts(conversationId);
+      forwardInboundToSupport({
+        account: { ...account, channel: 'email' },
+        msg,
+        conversationId,
+      });
+    }
   }
 
   if (stored > 0) {
@@ -96,7 +114,7 @@ export async function POST(req: NextRequest) {
   if (isSystemCron && body.all === true) {
     const { data: accounts, error } = await supabase
       .from('channel_accounts')
-      .select('id, company_id, credentials')
+      .select('id, company_id, credentials, delivery_target')
       .eq('channel', 'email')
       .eq('is_active', true);
 
@@ -138,8 +156,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'company_id required' }, { status: 400 });
     }
 
+    // Allow either: BPO user_companies match, or Support workspace claim match.
     const userCompanies = await getUserCompanyIds(auth.user.id);
-    if (!userCompanies.includes(companyId)) {
+    const supportWorkspace = getSupportWorkspaceId(auth.user);
+    const ok = userCompanies.includes(companyId) || supportWorkspace === companyId;
+    if (!ok) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
   }

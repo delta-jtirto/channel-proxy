@@ -1,7 +1,36 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { authenticateRequest, getUserCompanyIds } from '@/lib/auth/middleware';
+import {
+  authenticateRequest,
+  getSupportWorkspaceId,
+  getUserCompanyIds,
+  type AuthUser,
+} from '@/lib/auth/middleware';
 import { getServiceClient } from '@/lib/db/supabase';
 import { encryptCredentials, decryptCredentials } from '@/lib/credentials';
+
+/**
+ * Verify the caller can touch an existing account row, regardless of
+ * whether it belongs to BPO or Support. Mirrors the scope check in
+ * /api/proxy/accounts/route.ts: a Support account is reachable only by
+ * a user whose JWT `workspace_id` claim equals the row's company_id;
+ * a BPO account is reachable via user_companies. */
+async function checkExistingScope(
+  user: AuthUser,
+  row: { company_id: string; delivery_target?: string | null },
+): Promise<NextResponse | null> {
+  if ((row.delivery_target ?? 'bpo') === 'support') {
+    const ws = getSupportWorkspaceId(user);
+    if (!ws || ws !== row.company_id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    return null;
+  }
+  const companies = await getUserCompanyIds(user.id);
+  if (!companies.includes(row.company_id)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+  return null;
+}
 
 /**
  * GET /api/proxy/accounts/:id
@@ -17,7 +46,7 @@ export async function GET(
   const supabase = getServiceClient();
   const { data, error } = await supabase
     .from('channel_accounts')
-    .select('id, company_id, channel, display_name, is_active, created_at, updated_at')
+    .select('id, company_id, channel, display_name, is_active, delivery_target, created_at, updated_at')
     .eq('id', id)
     .single();
 
@@ -25,10 +54,8 @@ export async function GET(
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
-  const userCompanies = await getUserCompanyIds(auth.user.id);
-  if (!userCompanies.includes(data.company_id)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
+  const denied = await checkExistingScope(auth.user, data);
+  if (denied) return denied;
 
   return NextResponse.json({ account: data });
 }
@@ -52,7 +79,7 @@ export async function PUT(
   // Get existing account to verify access AND for credentials_patch merging
   const { data: existing } = await supabase
     .from('channel_accounts')
-    .select('company_id, credentials')
+    .select('company_id, credentials, delivery_target')
     .eq('id', id)
     .single();
 
@@ -60,10 +87,8 @@ export async function PUT(
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
-  const userCompanies = await getUserCompanyIds(auth.user.id);
-  if (!userCompanies.includes(existing.company_id)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
+  const denied = await checkExistingScope(auth.user, existing);
+  if (denied) return denied;
 
   const updates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
@@ -115,7 +140,7 @@ export async function DELETE(
 
   const { data: existing } = await supabase
     .from('channel_accounts')
-    .select('company_id')
+    .select('company_id, delivery_target')
     .eq('id', id)
     .single();
 
@@ -123,10 +148,8 @@ export async function DELETE(
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
-  const userCompanies = await getUserCompanyIds(auth.user.id);
-  if (!userCompanies.includes(existing.company_id)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
+  const denied = await checkExistingScope(auth.user, existing);
+  if (denied) return denied;
 
   const { error } = await supabase.from('channel_accounts').delete().eq('id', id);
 

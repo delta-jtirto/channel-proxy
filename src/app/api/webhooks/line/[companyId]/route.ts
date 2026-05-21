@@ -11,6 +11,7 @@ import {
 import { getServiceClient } from '@/lib/db/supabase';
 import { decryptCredentials } from '@/lib/credentials';
 import { registry } from '@/lib/adapters/registry';
+import { forwardInboundToSupport } from '@/lib/forwarders/support';
 
 const LINE_API = 'https://api.line.me/v2/bot';
 
@@ -110,6 +111,7 @@ export async function POST(
       );
       const { isDuplicate } = await insertMessage(conversationId, msg);
       if (!isDuplicate) await incrementConversationCounts(conversationId);
+      if (!isDuplicate) forwardInboundToSupport({ account, msg, conversationId });
     }
 
     // Mark channel as connected (first webhook received)

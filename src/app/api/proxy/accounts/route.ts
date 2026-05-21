@@ -1,7 +1,45 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { authenticateRequest, getUserCompanyIds } from '@/lib/auth/middleware';
+import {
+  authenticateRequest,
+  getSupportWorkspaceId,
+  getUserCompanyIds,
+  type AuthUser,
+} from '@/lib/auth/middleware';
 import { getServiceClient } from '@/lib/db/supabase';
 import { encryptCredentials } from '@/lib/credentials';
+
+type DeliveryTarget = 'bpo' | 'support';
+
+/**
+ * Common scope check. An authenticated user may operate on a
+ * `company_id` if either:
+ *   - their `user_companies` row links them to it (BPO path), or
+ *   - their JWT carries `app_metadata.workspace_id` equal to it AND
+ *     `delivery_target === 'support'` (Support path).
+ *
+ * Returns null on success, an error NextResponse on rejection.
+ */
+async function checkScope(
+  user: AuthUser,
+  companyId: string,
+  deliveryTarget: DeliveryTarget,
+): Promise<NextResponse | null> {
+  if (deliveryTarget === 'support') {
+    const ws = getSupportWorkspaceId(user);
+    if (!ws || ws !== companyId) {
+      return NextResponse.json(
+        { error: 'Forbidden — JWT workspace_id does not match the requested tenant' },
+        { status: 403 },
+      );
+    }
+    return null;
+  }
+  const companies = await getUserCompanyIds(user.id);
+  if (!companies.includes(companyId)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+  return null;
+}
 
 /**
  * GET /api/proxy/accounts?company_id=X
@@ -15,18 +53,25 @@ export async function GET(req: NextRequest) {
   if (!companyId) {
     return NextResponse.json({ error: 'company_id required' }, { status: 400 });
   }
-
-  // Verify user has access to this company
-  const userCompanies = await getUserCompanyIds(auth.user.id);
-  if (!userCompanies.includes(companyId)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  // The caller hints at scope via `delivery_target` (defaults to 'bpo').
+  // Support's frontend always sends `delivery_target=support` so we know
+  // to verify against the workspace claim, not user_companies.
+  const dt = (req.nextUrl.searchParams.get('delivery_target') ?? 'bpo') as DeliveryTarget;
+  if (dt !== 'bpo' && dt !== 'support') {
+    return NextResponse.json({ error: 'Invalid delivery_target' }, { status: 400 });
   }
+
+  const denied = await checkScope(auth.user, companyId, dt);
+  if (denied) return denied;
 
   const supabase = getServiceClient();
   const { data, error } = await supabase
     .from('channel_accounts')
-    .select('id, company_id, channel, display_name, is_active, host_id, last_webhook_at, created_at, updated_at')
+    .select(
+      'id, company_id, channel, display_name, is_active, host_id, delivery_target, last_webhook_at, created_at, updated_at',
+    )
     .eq('company_id', companyId)
+    .eq('delivery_target', dt)
     .order('created_at');
 
   if (error) {
@@ -46,6 +91,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const { company_id, channel, display_name, credentials, host_id } = body;
+  const delivery_target: DeliveryTarget = body.delivery_target === 'support' ? 'support' : 'bpo';
 
   if (!company_id || !channel || !display_name || !credentials) {
     return NextResponse.json(
@@ -54,11 +100,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Verify user has admin access to this company
-  const userCompanies = await getUserCompanyIds(auth.user.id);
-  if (!userCompanies.includes(company_id)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
+  const denied = await checkScope(auth.user, company_id, delivery_target);
+  if (denied) return denied;
 
   // Encrypt credentials before storing
   const encryptedCreds = encryptCredentials(credentials);
@@ -71,9 +114,10 @@ export async function POST(req: NextRequest) {
       channel,
       display_name,
       credentials: encryptedCreds,
+      delivery_target,
       ...(host_id ? { host_id } : {}),
     })
-    .select('id, company_id, channel, display_name, is_active, host_id, created_at')
+    .select('id, company_id, channel, display_name, is_active, host_id, delivery_target, created_at')
     .single();
 
   if (error) {

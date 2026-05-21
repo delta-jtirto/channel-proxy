@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getChannelAccount, insertWebhookLog, upsertContact, upsertConversation, insertMessage, incrementConversationCounts } from '@/lib/db/queries';
 import { decryptCredentials } from '@/lib/credentials';
 import { fetchNewMessages, parseGmailMessage } from '@/lib/adapters/email/gmail';
+import { forwardInboundToSupport } from '@/lib/forwarders/support';
 
 /**
  * POST: Email push notification webhook.
@@ -77,6 +78,7 @@ export async function POST(
       if (!isDuplicate) {
         processed++;
         await incrementConversationCounts(conversationId);
+        forwardInboundToSupport({ account, msg: normalized, conversationId });
       }
     }
 
