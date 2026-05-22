@@ -74,6 +74,11 @@ export async function POST(
   const accounts = (allEmailAccounts ?? []).filter(
     (a) => a.handle === targetEmail || a.display_name === targetEmail,
   );
+  console.info(
+    `[email-webhook] mailbox=${targetEmail} historyId=${historyId} matched=${accounts.length}/${allEmailAccounts?.length ?? 0} → ${accounts
+      .map((a) => `${a.company_id}/${a.delivery_target}`)
+      .join(',')}`,
+  );
   if (accounts.length === 0) {
     console.warn(`[email-webhook] no account matched mailbox ${targetEmail}`);
     return new Response('OK', { status: 200 });
@@ -94,6 +99,9 @@ export async function POST(
       }
 
       const gmailMessages = await fetchNewMessages(refreshToken, historyId);
+      console.info(
+        `[email-webhook] account ${account.id} (${account.company_id}/${account.delivery_target}) fetched ${gmailMessages.length} message(s) since historyId=${historyId}`,
+      );
 
       for (const gmailMsg of gmailMessages) {
         const normalized = parseGmailMessage(gmailMsg, account.company_id);
