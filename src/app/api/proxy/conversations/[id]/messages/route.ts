@@ -30,7 +30,7 @@ export async function GET(
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
-  const userCompanies = await getUserCompanyIds(auth.user.id);
+  const userCompanies = await getUserCompanyIds(auth.user.id, auth.user.accessToken);
   if (!userCompanies.includes(convo.company_id)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }

@@ -65,7 +65,7 @@ async function checkScope(
     }
     return null;
   }
-  const companies = await getUserCompanyIds(user.id);
+  const companies = await getUserCompanyIds(user.id, user.accessToken);
   if (!companies.includes(companyId)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }

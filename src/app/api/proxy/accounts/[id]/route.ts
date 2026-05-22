@@ -50,7 +50,7 @@ async function checkExistingScope(
     }
     return null;
   }
-  const companies = await getUserCompanyIds(user.id);
+  const companies = await getUserCompanyIds(user.id, user.accessToken);
   if (!companies.includes(row.company_id)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }

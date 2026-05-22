@@ -172,7 +172,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Allow either: BPO user_companies match, or Support workspace claim match.
-    const userCompanies = await getUserCompanyIds(auth.user.id);
+    const userCompanies = await getUserCompanyIds(auth.user.id, auth.user.accessToken);
     const supportWorkspace = getSupportWorkspaceId(auth.user);
     const ok = userCompanies.includes(companyId) || supportWorkspace === companyId;
     if (!ok) {

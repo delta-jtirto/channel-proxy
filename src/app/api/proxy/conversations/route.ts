@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'company_id required' }, { status: 400 });
   }
 
-  const userCompanies = await getUserCompanyIds(auth.user.id);
+  const userCompanies = await getUserCompanyIds(auth.user.id, auth.user.accessToken);
   if (!userCompanies.includes(companyId)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }

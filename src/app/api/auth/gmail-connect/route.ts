@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
       );
     }
   } else {
-    const userCompanies = await getUserCompanyIds(auth.user.id);
+    const userCompanies = await getUserCompanyIds(auth.user.id, auth.user.accessToken);
     if (!userCompanies.includes(company_id)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
