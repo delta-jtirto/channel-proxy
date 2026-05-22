@@ -55,22 +55,27 @@ export async function POST(
     return new Response('OK', { status: 200 });
   }
 
-  // Look up every account watching this mailbox. We try `handle` first
-  // (populated for accounts created after the handle backfill landed)
-  // and fall back to `display_name` for legacy rows where handle is null.
+  // Look up every account watching this mailbox. We fetch all active
+  // email accounts and filter in JS by handle/display_name: PostgREST's
+  // `.or()` URL-encoding mangles addresses containing '@' so the
+  // server-side filter would silently miss valid rows. The email
+  // accounts table is small enough that this is fine.
   const supabase = getServiceClient();
-  const { data: accounts, error: fetchErr } = await supabase
+  const { data: allEmailAccounts, error: fetchErr } = await supabase
     .from('channel_accounts')
     .select('id, company_id, channel, display_name, handle, delivery_target, credentials, is_active, last_webhook_at')
     .eq('channel', 'email')
-    .eq('is_active', true)
-    .or(`handle.eq.${targetEmail},display_name.eq.${targetEmail}`);
+    .eq('is_active', true);
 
   if (fetchErr) {
     console.error('Webhook account lookup failed:', fetchErr.message);
     return new Response('OK', { status: 200 });
   }
-  if (!accounts || accounts.length === 0) {
+  const accounts = (allEmailAccounts ?? []).filter(
+    (a) => a.handle === targetEmail || a.display_name === targetEmail,
+  );
+  if (accounts.length === 0) {
+    console.warn(`[email-webhook] no account matched mailbox ${targetEmail}`);
     return new Response('OK', { status: 200 });
   }
 
