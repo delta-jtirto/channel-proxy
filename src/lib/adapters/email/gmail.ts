@@ -99,15 +99,36 @@ export async function registerGmailWatch(refreshToken: string) {
 export async function fetchNewMessages(refreshToken: string, historyId: string) {
   const token = await getAccessToken(refreshToken);
 
-  // Get history since the notification
+  // Gmail's history.list returns records AFTER startHistoryId (exclusive).
+  // The Pub/Sub push contains the historyId of the change that just
+  // happened, so passing it verbatim returns nothing — we'd be asking
+  // for changes after the change itself. Subtract a small buffer so the
+  // window includes the triggering event. 50 is well below Gmail's 7-day
+  // history retention but generous enough to absorb the gap between the
+  // push fire and our query, plus a few interleaved unrelated events.
+  // Proper long-term fix: track a per-account last_history_id watermark
+  // updated from watch()'s initial response and each successful fetch.
+  const startNum = Math.max(1, (parseInt(historyId, 10) || 0) - 50);
+  const startHistoryId = String(startNum);
+
+  // Get history since the notification (minus buffer)
   const historyRes = await fetch(
-    `${GMAIL_API}/history?startHistoryId=${historyId}&historyTypes=messageAdded`,
+    `${GMAIL_API}/history?startHistoryId=${startHistoryId}&historyTypes=messageAdded`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
-  if (!historyRes.ok) return [];
+  if (!historyRes.ok) {
+    const body = await historyRes.text().catch(() => '');
+    console.warn(
+      `[gmail.fetchNewMessages] history.list failed: ${historyRes.status} ${body.slice(0, 200)}`,
+    );
+    return [];
+  }
   const history = (await historyRes.json()) as {
     history?: { messagesAdded?: { message?: { id: string } }[] }[];
   };
+  console.info(
+    `[gmail.fetchNewMessages] startHistoryId=${startHistoryId} (push=${historyId}) → ${history.history?.length ?? 0} history record(s)`,
+  );
 
   const messageIds: string[] = [];
   for (const h of history.history ?? []) {
