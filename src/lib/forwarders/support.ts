@@ -59,6 +59,10 @@ export function forwardInboundToSupport(opts: {
     sender_handle: msg.channel_sender_id,
     sender_name: msg.sender_name || undefined,
     text: msg.text_body ?? '',
+    // Rich-email fields — Support's edge function persists them when
+    // present and the inbox renders html_body in a sandboxed iframe.
+    html_body: msg.html_body ?? undefined,
+    subject: msg.subject ?? undefined,
     message_id: msg.channel_message_id,
     received_at: msg.channel_timestamp,
   };

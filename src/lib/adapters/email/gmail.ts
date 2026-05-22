@@ -108,16 +108,18 @@ export async function fetchNewMessages(refreshToken: string, historyId: string) 
   // push fire and our query, plus a few interleaved unrelated events.
   // Proper long-term fix: track a per-account last_history_id watermark
   // updated from watch()'s initial response and each successful fetch.
-  // Buffer of 500 (was 50) — large enough to absorb interleaved
-  // non-mail events (label changes, reads) between the last query and
-  // the current push without ever going past Gmail's 7-day retention.
+  // Gmail's history.list returns events strictly AFTER startHistoryId,
+  // but Pub/Sub pushes the historyId of the change itself. Subtract a
+  // buffer so the window includes the triggering event + a handful of
+  // interleaved unrelated events (label changes, reads). 500 is well
+  // below Gmail's 7-day retention. Long-term fix: track last_history_id
+  // per account, updated from watch() and each successful fetch.
   const startNum = Math.max(1, (parseInt(historyId, 10) || 0) - 500);
   const startHistoryId = String(startNum);
 
-  // Drop the historyTypes=messageAdded filter — Gmail occasionally
-  // categorises new mail events under different history types and our
-  // narrow filter was hiding them. We post-filter on .messagesAdded
-  // below, which gives us the same selection without the API-side gate.
+  // No historyTypes filter — we post-filter on .messagesAdded below.
+  // Gmail occasionally puts new mail under different history record
+  // types and the API-side filter was hiding events we needed.
   const historyRes = await fetch(
     `${GMAIL_API}/history?startHistoryId=${startHistoryId}`,
     { headers: { Authorization: `Bearer ${token}` } },
@@ -129,17 +131,9 @@ export async function fetchNewMessages(refreshToken: string, historyId: string) 
     );
     return [];
   }
-  const rawJson = await historyRes.text();
-  let history: { history?: { messagesAdded?: { message?: { id: string } }[] }[] };
-  try {
-    history = JSON.parse(rawJson);
-  } catch {
-    console.warn('[gmail.fetchNewMessages] failed to parse history response:', rawJson.slice(0, 200));
-    return [];
-  }
-  console.info(
-    `[gmail.fetchNewMessages] startHistoryId=${startHistoryId} (push=${historyId}) → ${history.history?.length ?? 0} history record(s); raw=${rawJson.slice(0, 300)}`,
-  );
+  const history = (await historyRes.json()) as {
+    history?: { messagesAdded?: { message?: { id: string } }[] }[];
+  };
 
   const messageIds: string[] = [];
   for (const h of history.history ?? []) {
