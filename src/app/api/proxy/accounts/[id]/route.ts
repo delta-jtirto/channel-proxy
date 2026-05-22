@@ -8,6 +8,31 @@ import {
 import { getServiceClient } from '@/lib/db/supabase';
 import { encryptCredentials, decryptCredentials } from '@/lib/credentials';
 
+/** Same shape as accounts/route.ts — duplicate it locally so a future
+ *  change to credential schemas only touches one file at a time. */
+function extractHandle(
+  channel: string,
+  credentials: Record<string, unknown>,
+): string | null {
+  const s = (k: string): string | null => {
+    const v = credentials[k];
+    return typeof v === 'string' && v.trim().length > 0 ? v.trim() : null;
+  };
+  switch (channel) {
+    case 'email':
+      return s('email_address');
+    case 'whatsapp':
+    case 'wati':
+      return s('phone_number_id');
+    case 'instagram':
+      return s('ig_user_id');
+    case 'line':
+      return s('channel_id');
+    default:
+      return null;
+  }
+}
+
 /**
  * Verify the caller can touch an existing account row, regardless of
  * whether it belongs to BPO or Support. Mirrors the scope check in
@@ -46,7 +71,7 @@ export async function GET(
   const supabase = getServiceClient();
   const { data, error } = await supabase
     .from('channel_accounts')
-    .select('id, company_id, channel, display_name, is_active, delivery_target, created_at, updated_at')
+    .select('id, company_id, channel, display_name, handle, is_active, delivery_target, created_at, updated_at')
     .eq('id', id)
     .single();
 
@@ -79,7 +104,7 @@ export async function PUT(
   // Get existing account to verify access AND for credentials_patch merging
   const { data: existing } = await supabase
     .from('channel_accounts')
-    .select('company_id, credentials, delivery_target')
+    .select('company_id, channel, credentials, delivery_target')
     .eq('id', id)
     .single();
 
@@ -99,7 +124,12 @@ export async function PUT(
   if (body.host_id !== undefined) updates.host_id = body.host_id || null;
 
   // Full replacement: body.credentials = full new creds object (legacy path)
-  if (body.credentials) updates.credentials = encryptCredentials(body.credentials);
+  if (body.credentials) {
+    updates.credentials = encryptCredentials(body.credentials);
+    // Re-extract the handle so the settings UI keeps showing the right
+    // mailbox / phone / id when the operator rotates credentials.
+    updates.handle = extractHandle(existing.channel as string, body.credentials);
+  }
 
   // Partial update: body.credentials_patch = { access_token: 'new...' }
   // Decrypt existing creds, merge patch, re-encrypt. Lets the UI rotate
@@ -108,13 +138,14 @@ export async function PUT(
     const current = decryptCredentials(existing.credentials);
     const merged = { ...current, ...body.credentials_patch };
     updates.credentials = encryptCredentials(merged);
+    updates.handle = extractHandle(existing.channel as string, merged);
   }
 
   const { data, error } = await supabase
     .from('channel_accounts')
     .update(updates)
     .eq('id', id)
-    .select('id, company_id, channel, display_name, is_active, host_id, updated_at')
+    .select('id, company_id, channel, display_name, handle, is_active, host_id, updated_at')
     .single();
 
   if (error) {

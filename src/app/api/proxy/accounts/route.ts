@@ -11,6 +11,37 @@ import { encryptCredentials } from '@/lib/credentials';
 type DeliveryTarget = 'bpo' | 'support';
 
 /**
+ * Pull a human-readable handle out of the credentials bundle so the
+ * settings UI can show the actual mailbox / phone / id instead of the
+ * operator-typed display_name. Always safe to persist (no secrets).
+ *
+ * If a channel's only identifier IS sensitive, return null and we'll
+ * store nothing — the row falls back to display_name in the UI.
+ */
+function extractHandle(
+  channel: string,
+  credentials: Record<string, unknown>,
+): string | null {
+  const s = (k: string): string | null => {
+    const v = credentials[k];
+    return typeof v === 'string' && v.trim().length > 0 ? v.trim() : null;
+  };
+  switch (channel) {
+    case 'email':
+      return s('email_address');
+    case 'whatsapp':
+    case 'wati':
+      return s('phone_number_id');
+    case 'instagram':
+      return s('ig_user_id');
+    case 'line':
+      return s('channel_id');
+    default:
+      return null;
+  }
+}
+
+/**
  * Common scope check. An authenticated user may operate on a
  * `company_id` if either:
  *   - their `user_companies` row links them to it (BPO path), or
@@ -68,7 +99,7 @@ export async function GET(req: NextRequest) {
   const { data, error } = await supabase
     .from('channel_accounts')
     .select(
-      'id, company_id, channel, display_name, is_active, host_id, delivery_target, last_webhook_at, created_at, updated_at',
+      'id, company_id, channel, display_name, handle, is_active, host_id, delivery_target, last_webhook_at, created_at, updated_at',
     )
     .eq('company_id', companyId)
     .eq('delivery_target', dt)
@@ -105,6 +136,7 @@ export async function POST(req: NextRequest) {
 
   // Encrypt credentials before storing
   const encryptedCreds = encryptCredentials(credentials);
+  const handle = extractHandle(channel, credentials);
 
   const supabase = getServiceClient();
   const { data, error } = await supabase
@@ -115,9 +147,10 @@ export async function POST(req: NextRequest) {
       display_name,
       credentials: encryptedCreds,
       delivery_target,
+      handle,
       ...(host_id ? { host_id } : {}),
     })
-    .select('id, company_id, channel, display_name, is_active, host_id, delivery_target, created_at')
+    .select('id, company_id, channel, display_name, handle, is_active, host_id, delivery_target, created_at')
     .single();
 
   if (error) {
