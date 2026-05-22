@@ -16,6 +16,9 @@ type EmailCreds = {
   imap_host: string;
   imap_port: string;
   provider: string;
+  /** Present on OAuth-connected mailboxes; mutually-exclusive with the
+   *  IMAP fields above. We branch on this before attempting IMAP. */
+  refresh_token?: string;
 };
 
 type FetchResult = {
@@ -25,6 +28,10 @@ type FetchResult = {
   stored: number;
   duplicates: number;
   error?: string;
+  /** Non-error reason this account wasn't polled. Used for OAuth mailboxes
+   *  that receive mail via Gmail Pub/Sub push and have no IMAP creds —
+   *  the frontend treats `skipped` as success-with-message, not error. */
+  skipped?: string;
 };
 
 // Pulls unread mail for a single connected account and inserts into the
@@ -47,6 +54,14 @@ async function fetchOneAccount(
     stored: 0,
     duplicates: 0,
   };
+
+  // OAuth-connected mailboxes (provider='gmail' + refresh_token) receive
+  // mail via Pub/Sub push and have no IMAP creds by design. Reporting
+  // them as "Incomplete credentials" confuses operators. Surface them
+  // as `skipped` so the frontend can show a friendly message instead.
+  if (creds.provider === 'gmail' && typeof creds.refresh_token === 'string' && creds.refresh_token) {
+    return { ...base, skipped: 'OAuth mailbox — auto-syncs via Gmail push' };
+  }
 
   if (!creds.email_address || !creds.password || !creds.imap_host) {
     return { ...base, error: 'Incomplete credentials' };
