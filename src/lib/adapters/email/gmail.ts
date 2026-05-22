@@ -257,55 +257,62 @@ const emailInbound: InboundAdapter = {
 // Outbound Adapter (send via Gmail REST API)
 // ============================================================
 
+/**
+ * Send a single email via the Gmail REST API using a stored refresh
+ * token. Called by smtp.ts when the account's credentials carry
+ * provider='gmail' + refresh_token (OAuth-connected mailbox) instead
+ * of an SMTP password.
+ */
+export async function gmailApiSend(
+  creds: DecryptedCredentials,
+  msg: OutboundMessage,
+  recipientEmail: string,
+): Promise<SendResult> {
+  const refreshToken = creds.refresh_token as string;
+  const senderEmail = creds.email_address as string;
+  const token = await getAccessToken(refreshToken);
+
+  const subject = (msg.metadata?.subject as string) ?? 'Re: Your message';
+  const raw = [
+    `From: ${senderEmail}`,
+    `To: ${recipientEmail}`,
+    `Subject: ${subject}`,
+    `Content-Type: text/plain; charset=utf-8`,
+    '',
+    msg.text,
+  ].join('\r\n');
+
+  const encodedMessage = Buffer.from(raw).toString('base64url');
+  const body: { raw: string; threadId?: string } = { raw: encodedMessage };
+  if (msg.metadata?.gmail_thread_id) {
+    body.threadId = msg.metadata.gmail_thread_id as string;
+  }
+
+  const res = await fetch(`${GMAIL_API}/messages/send`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    return {
+      channel_message_id: '',
+      status: 'failed',
+      error_message: `Gmail send failed: ${res.status} ${JSON.stringify(err)}`,
+    };
+  }
+
+  const result = (await res.json()) as { id?: string };
+  return { channel_message_id: result.id ?? '', status: 'sent' };
+}
+
 const emailOutbound: OutboundAdapter = {
   channel: 'email',
-
-  async send(
-    creds: DecryptedCredentials,
-    msg: OutboundMessage,
-    recipientEmail: string,
-  ): Promise<SendResult> {
-    const refreshToken = creds.refresh_token as string;
-    const senderEmail = creds.email_address as string;
-    const token = await getAccessToken(refreshToken);
-
-    const subject = (msg.metadata?.subject as string) ?? 'Re: Your message';
-    const raw = [
-      `From: ${senderEmail}`,
-      `To: ${recipientEmail}`,
-      `Subject: ${subject}`,
-      `Content-Type: text/plain; charset=utf-8`,
-      '',
-      msg.text,
-    ].join('\r\n');
-
-    const encodedMessage = Buffer.from(raw).toString('base64url');
-    const body: { raw: string; threadId?: string } = { raw: encodedMessage };
-    if (msg.metadata?.gmail_thread_id) {
-      body.threadId = msg.metadata.gmail_thread_id as string;
-    }
-
-    const res = await fetch(`${GMAIL_API}/messages/send`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      return {
-        channel_message_id: '',
-        status: 'failed',
-        error_message: `Gmail send failed: ${res.status} ${JSON.stringify(err)}`,
-      };
-    }
-
-    const result = (await res.json()) as { id?: string };
-    return { channel_message_id: result.id ?? '', status: 'sent' };
-  },
+  send: gmailApiSend,
 };
 
 // NOTE: Outbound email is now handled by the SMTP adapter at

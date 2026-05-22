@@ -61,6 +61,18 @@ const smtpOutbound: OutboundAdapter = {
     msg: OutboundMessage,
     recipientEmail: string,
   ): Promise<SendResult> {
+    // OAuth-connected Gmail accounts have provider='gmail' + refresh_token
+    // but NO smtp_host/password. Delegate those to the Gmail API send
+    // path (defined alongside the inbound adapter in gmail.ts) so the
+    // operator's reply transmits using the refresh token, not SMTP.
+    //
+    // App-password and other IMAP accounts continue through the existing
+    // SMTP path below.
+    if (creds.provider === 'gmail' && typeof creds.refresh_token === 'string' && creds.refresh_token) {
+      const { gmailApiSend } = await import('./gmail');
+      return gmailApiSend(creds, msg, recipientEmail);
+    }
+
     if (!isSmtpCreds(creds)) {
       return {
         channel_message_id: '',
