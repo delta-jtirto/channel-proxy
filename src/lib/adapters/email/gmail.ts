@@ -70,6 +70,10 @@ export async function exchangeGmailCode(code: string) {
 }
 
 export async function registerGmailWatch(refreshToken: string) {
+  const topicName = process.env.GOOGLE_PUBSUB_TOPIC;
+  if (!topicName) {
+    throw new Error('GOOGLE_PUBSUB_TOPIC env var is not set');
+  }
   const token = await getAccessToken(refreshToken);
   const res = await fetch(`${GMAIL_API}/watch`, {
     method: 'POST',
@@ -78,11 +82,17 @@ export async function registerGmailWatch(refreshToken: string) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      topicName: process.env.GOOGLE_PUBSUB_TOPIC!,
+      topicName,
       labelIds: ['INBOX'],
     }),
   });
-  if (!res.ok) throw new Error(`Gmail watch failed: ${res.status}`);
+  if (!res.ok) {
+    // Surface the actual Google API error body — without it every watch
+    // failure looks like a generic 400 and you can't tell whether it's
+    // a missing topic, missing IAM grant, disabled API, etc.
+    const body = await res.text().catch(() => '');
+    throw new Error(`Gmail watch failed: ${res.status} ${body.slice(0, 600)}`);
+  }
   return res.json();
 }
 
