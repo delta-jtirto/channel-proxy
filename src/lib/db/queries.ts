@@ -102,6 +102,13 @@ export async function upsertConversation(
   channelThreadId: string,
   lastMessagePreview: string | null,
   subject: string | null,
+  /**
+   * Direction of the message that triggered this upsert. Every current
+   * caller is a webhook / mailbox poller (inbound), so this defaults to
+   * 'inbound' for back-compat. The send route updates the conversation
+   * separately and sets 'outbound' itself.
+   */
+  direction: 'inbound' | 'outbound' = 'inbound',
 ): Promise<string> {
   const supabase = getServiceClient();
 
@@ -123,6 +130,7 @@ export async function upsertConversation(
       .update({
         last_message_at: now,
         last_message_preview: lastMessagePreview,
+        last_message_direction: direction,
         updated_at: now,
         status: 'active',
       })
@@ -142,6 +150,7 @@ export async function upsertConversation(
       subject,
       last_message_at: now,
       last_message_preview: lastMessagePreview,
+      last_message_direction: direction,
       unread_count: 1,
       message_count: 1,
     })

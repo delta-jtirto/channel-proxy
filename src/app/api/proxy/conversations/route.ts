@@ -30,7 +30,8 @@ export async function GET(req: NextRequest) {
     .select(
       `
       id, company_id, channel, channel_thread_id, subject, status,
-      last_message_at, last_message_preview, unread_count, message_count,
+      last_message_at, last_message_preview, last_message_direction,
+      unread_count, message_count,
       created_at, updated_at,
       contacts!inner (id, channel_contact_id, display_name, avatar_url)
     `,

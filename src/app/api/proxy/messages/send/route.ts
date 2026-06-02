@@ -176,12 +176,15 @@ export async function POST(req: NextRequest) {
     console.error('Failed to store outbound message:', insertError);
   }
 
-  // Update conversation last message
+  // Update conversation last message. `last_message_direction = 'outbound'`
+  // is what the BPO inbox reads to pause the SLA clock — every send here
+  // is by definition a reply from our side.
   await supabase
     .from('conversations')
     .update({
       last_message_at: now,
       last_message_preview: text.slice(0, 200),
+      last_message_direction: 'outbound',
       message_count: (convo as Record<string, unknown>).message_count
         ? ((convo as Record<string, unknown>).message_count as number) + 1
         : 1,

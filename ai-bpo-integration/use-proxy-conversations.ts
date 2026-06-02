@@ -21,6 +21,11 @@ export interface ProxyConversation {
   status: string;
   last_message_at: string;
   last_message_preview: string | null;
+  /** Direction of the most recent message. Lets the BPO inbox pause the
+   *  SLA clock when the team has already replied (outbound) without
+   *  loading the message list. Null for legacy rows that haven't been
+   *  touched since the column was backfilled. */
+  last_message_direction: 'inbound' | 'outbound' | null;
   unread_count: number;
   message_count: number;
   created_at: string;
@@ -81,7 +86,8 @@ export function useProxyConversations({
       .from('conversations')
       .select(`
         id, company_id, channel, channel_thread_id, subject, status,
-        last_message_at, last_message_preview, unread_count, message_count,
+        last_message_at, last_message_preview, last_message_direction,
+        unread_count, message_count,
         created_at, updated_at,
         contacts!inner (id, channel_contact_id, display_name, avatar_url)
       `)
