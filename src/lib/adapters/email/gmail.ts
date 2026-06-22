@@ -1,4 +1,5 @@
 import { OAuth2Client } from 'google-auth-library';
+import { emailIdempotencyKey } from './message-id';
 import type {
   InboundAdapter,
   OutboundAdapter,
@@ -236,7 +237,8 @@ export function parseGmailMessage(
     },
     channel_message_id: gmailMsg.id ?? '',
     channel_timestamp: date ? new Date(date).toISOString() : new Date().toISOString(),
-    idempotency_key: `email_gmail_${gmailMsg.id}`,
+    // Key on the RFC822 Message-ID so an IMAP ingestion of the same email dedups.
+    idempotency_key: emailIdempotencyKey(messageId, gmailMsg.id ?? ''),
   };
 }
 

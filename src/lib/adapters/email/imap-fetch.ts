@@ -1,5 +1,6 @@
 import { ImapFlow } from 'imapflow';
 import type { NormalizedMessage } from '../types';
+import { emailIdempotencyKey } from './message-id';
 
 interface ImapCredentials {
   email_address: string;
@@ -114,7 +115,9 @@ export async function fetchUnreadEmails(
           },
           channel_message_id: messageId,
           channel_timestamp: date,
-          idempotency_key: `email_imap_${messageId}`,
+          // Key on the RFC822 Message-ID so a Gmail-API ingestion of the same
+          // email dedups. Pass the raw header (not the imap_<uid> fallback).
+          idempotency_key: emailIdempotencyKey(envelope.messageId, `imap_${msg.uid}`),
         });
 
         uids.push(msg.uid);
