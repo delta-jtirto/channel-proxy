@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { verifyQStashSignature, type WebhookPayload } from '@/lib/queue';
-import { getChannelAccount, upsertContact, upsertConversation, insertMessage, incrementConversationCounts } from '@/lib/db/queries';
+import { getChannelAccountId, upsertContact, upsertConversation, insertMessage, bumpConversation } from '@/lib/db/queries';
 import type { Channel, NormalizedMessage } from '@/lib/adapters/types';
 
 // Import all adapters to register them.
@@ -43,7 +43,7 @@ export async function POST(req: Request) {
     }
 
     // Get the channel account
-    const account = await getChannelAccount(companyId, channel);
+    const account = await getChannelAccountId(companyId, channel);
     if (!account) {
       console.error(`No active account for company=${companyId} channel=${channel}`);
       return NextResponse.json({ error: 'Account not found' }, { status: 404 });
@@ -101,13 +101,14 @@ async function processMessage(msg: NormalizedMessage, accountId: string) {
   );
 
   // 2. Upsert conversation
-  const conversationId = await upsertConversation(
+  const preview = msg.text_body?.slice(0, 200) ?? null;
+  const { id: conversationId, isNew } = await upsertConversation(
     msg.company_id,
     msg.channel,
     contactId,
     accountId,
     msg.channel_thread_id,
-    msg.text_body?.slice(0, 200) ?? null, // preview
+    preview,
     msg.subject ?? null,
   );
 
@@ -118,6 +119,7 @@ async function processMessage(msg: NormalizedMessage, accountId: string) {
     throw new Error('duplicate');
   }
 
-  // 4. Increment unread/message counts for the conversation
-  await incrementConversationCounts(conversationId);
+  // 4. Bump conversation (last_message + counts). New conversations are
+  // already seeded by the INSERT, so only bump existing ones.
+  if (!isNew) await bumpConversation(conversationId, preview, 'inbound');
 }

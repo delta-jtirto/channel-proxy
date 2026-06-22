@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { insertWebhookLog, upsertContact, upsertConversation, insertMessage, incrementConversationCounts } from '@/lib/db/queries';
+import { insertWebhookLog, upsertContact, upsertConversation, insertMessage, bumpConversation } from '@/lib/db/queries';
 import { decryptCredentials } from '@/lib/credentials';
 import { fetchNewMessages, parseGmailMessage } from '@/lib/adapters/email/gmail';
 import { forwardInboundToSupport } from '@/lib/forwarders/support';
@@ -109,20 +109,21 @@ export async function POST(
           null,
         );
 
-        const conversationId = await upsertConversation(
+        const preview = normalized.text_body?.slice(0, 200) ?? null;
+        const { id: conversationId, isNew } = await upsertConversation(
           account.company_id,
           'email',
           contactId,
           account.id,
           normalized.channel_thread_id,
-          normalized.text_body?.slice(0, 200) ?? null,
+          preview,
           normalized.subject ?? null,
         );
 
         const { isDuplicate } = await insertMessage(conversationId, normalized);
         if (!isDuplicate) {
           processedTotal++;
-          await incrementConversationCounts(conversationId);
+          if (!isNew) await bumpConversation(conversationId, preview, 'inbound');
           forwardInboundToSupport({ account, msg: normalized, conversationId });
         }
       }

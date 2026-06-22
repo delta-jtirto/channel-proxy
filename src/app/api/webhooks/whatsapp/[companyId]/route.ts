@@ -6,7 +6,7 @@ import {
   upsertContact,
   upsertConversation,
   insertMessage,
-  incrementConversationCounts,
+  bumpConversation,
   updateMessageStatusByChannelId,
 } from '@/lib/db/queries';
 import { getServiceClient } from '@/lib/db/supabase';
@@ -80,17 +80,18 @@ export async function POST(
         msg.sender_name,
         null,
       );
-      const conversationId = await upsertConversation(
+      const preview = msg.text_body?.slice(0, 200) ?? null;
+      const { id: conversationId, isNew } = await upsertConversation(
         companyId,
         'whatsapp',
         contactId,
         account.id,
         msg.channel_thread_id,
-        msg.text_body?.slice(0, 200) ?? null,
+        preview,
         msg.subject ?? null,
       );
       const { isDuplicate } = await insertMessage(conversationId, msg);
-      if (!isDuplicate) await incrementConversationCounts(conversationId);
+      if (!isDuplicate && !isNew) await bumpConversation(conversationId, preview, 'inbound');
       // Fire-and-forget forward to Support if this account is routed
       // there. Skipped for duplicates so the Support inbox doesn't
       // see the same message twice when Meta retries.

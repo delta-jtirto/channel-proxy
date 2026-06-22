@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServiceClient } from '@/lib/db/supabase';
 import { decryptCredentials } from '@/lib/credentials';
 import { fetchUnreadEmails } from '@/lib/adapters/email/imap-fetch';
-import { upsertContact, upsertConversation, insertMessage, incrementConversationCounts } from '@/lib/db/queries';
+import { upsertContact, upsertConversation, insertMessage, bumpConversation } from '@/lib/db/queries';
 
 /**
  * GET /api/cron/fetch-emails
@@ -50,11 +50,12 @@ export async function GET(req: Request) {
 
       for (const msg of emails) {
         const contactId = await upsertContact(account.company_id, 'email', msg.channel_sender_id, msg.sender_name, null);
-        const conversationId = await upsertConversation(account.company_id, 'email', contactId, account.id, msg.channel_thread_id, msg.text_body?.slice(0, 200) ?? null, msg.subject ?? null);
+        const preview = msg.text_body?.slice(0, 200) ?? null;
+        const { id: conversationId, isNew } = await upsertConversation(account.company_id, 'email', contactId, account.id, msg.channel_thread_id, preview, msg.subject ?? null);
         const { isDuplicate } = await insertMessage(conversationId, msg);
         if (!isDuplicate) {
           stored++;
-          await incrementConversationCounts(conversationId);
+          if (!isNew) await bumpConversation(conversationId, preview, 'inbound');
         }
       }
 

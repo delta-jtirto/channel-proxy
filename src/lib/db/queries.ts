@@ -38,6 +38,26 @@ export async function getChannelAccount(companyId: string, channel: string) {
   return data;
 }
 
+/**
+ * Lightweight account lookup that selects ONLY id + company_id — skips the
+ * encrypted credentials blob. Use on hot paths that only need account.id
+ * (e.g. the process-webhook worker). Callers that need credentials for
+ * signature verification must keep using getChannelAccount.
+ */
+export async function getChannelAccountId(companyId: string, channel: string) {
+  const supabase = getServiceClient();
+  const { data, error } = await supabase
+    .from('channel_accounts')
+    .select('id, company_id')
+    .eq('company_id', companyId)
+    .eq('channel', channel)
+    .eq('is_active', true)
+    .single();
+
+  if (error || !data) return null;
+  return data;
+}
+
 // ============================================================
 // Contact upsert
 // ============================================================
@@ -54,22 +74,33 @@ export async function upsertContact(
   // Try to find existing contact
   const { data: existing } = await supabase
     .from('contacts')
-    .select('id')
+    .select('id, display_name, avatar_url')
     .eq('company_id', companyId)
     .eq('channel', channel)
     .eq('channel_contact_id', channelContactId)
     .single();
 
   if (existing) {
-    // Update last_seen and name if available
-    await supabase
-      .from('contacts')
-      .update({
-        last_seen_at: new Date().toISOString(),
-        ...(displayName ? { display_name: displayName } : {}),
-        ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
-      })
-      .eq('id', existing.id);
+    // Only write when identity (name/avatar) actually changed. last_seen_at
+    // now refreshes only when identity changes (accepted tradeoff to drop
+    // per-message write churn).
+    const needsUpdate =
+      (displayName && displayName !== existing.display_name) ||
+      (avatarUrl && avatarUrl !== existing.avatar_url);
+    if (needsUpdate) {
+      await supabase
+        .from('contacts')
+        .update({
+          last_seen_at: new Date().toISOString(),
+          ...(displayName && displayName !== existing.display_name
+            ? { display_name: displayName }
+            : {}),
+          ...(avatarUrl && avatarUrl !== existing.avatar_url
+            ? { avatar_url: avatarUrl }
+            : {}),
+        })
+        .eq('id', existing.id);
+    }
     return existing.id;
   }
 
@@ -109,13 +140,13 @@ export async function upsertConversation(
    * separately and sets 'outbound' itself.
    */
   direction: 'inbound' | 'outbound' = 'inbound',
-): Promise<string> {
+): Promise<{ id: string; isNew: boolean }> {
   const supabase = getServiceClient();
 
   // Try to find existing conversation by channel thread
   const { data: existing } = await supabase
     .from('conversations')
-    .select('id, message_count, unread_count')
+    .select('id')
     .eq('company_id', companyId)
     .eq('channel', channel)
     .eq('contact_id', contactId)
@@ -125,20 +156,15 @@ export async function upsertConversation(
   const now = new Date().toISOString();
 
   if (existing) {
-    await supabase
-      .from('conversations')
-      .update({
-        last_message_at: now,
-        last_message_preview: lastMessagePreview,
-        last_message_direction: direction,
-        updated_at: now,
-        status: 'active',
-      })
-      .eq('id', existing.id);
-    return existing.id;
+    // No write here: the last_message_* fields and counts are bumped in a
+    // single round-trip by bumpConversation() once the message is confirmed
+    // non-duplicate. This collapses the previous double-write per message.
+    return { id: existing.id, isNew: false };
   }
 
-  // Create new conversation
+  // Create new conversation. The INSERT already sets counts=1 and the
+  // last_message_* fields, so a brand-new conversation needs NO bump
+  // (that was the prior off-by-one).
   const { data: newConvo, error } = await supabase
     .from('conversations')
     .insert({
@@ -158,7 +184,27 @@ export async function upsertConversation(
     .single();
 
   if (error) throw new Error(`Failed to create conversation: ${error.message}`);
-  return newConvo!.id;
+  return { id: newConvo!.id, isNew: true };
+}
+
+/**
+ * Bump an EXISTING conversation in a single round-trip: refresh last_message_*,
+ * mark active, and increment message_count (+ unread_count for inbound). Only
+ * call for confirmed non-duplicate messages on conversations that already
+ * existed before this message (a brand-new conversation is seeded by the
+ * upsertConversation INSERT and must NOT be bumped, else counts double).
+ */
+export async function bumpConversation(
+  conversationId: string,
+  preview: string | null,
+  direction: 'inbound' | 'outbound',
+): Promise<void> {
+  const supabase = getServiceClient();
+  await supabase.rpc('bump_conversation_on_message', {
+    p_conversation_id: conversationId,
+    p_preview: preview,
+    p_direction: direction,
+  });
 }
 
 // ============================================================
@@ -262,22 +308,4 @@ export async function updateMessageStatusByChannelId(
       ...(errorMessage ? { error_message: errorMessage } : {}),
     })
     .eq('id', existing.id);
-}
-
-export async function incrementConversationCounts(conversationId: string) {
-  const supabase = getServiceClient();
-  const { data: conv } = await supabase
-    .from('conversations')
-    .select('unread_count, message_count')
-    .eq('id', conversationId)
-    .single();
-  if (conv) {
-    await supabase
-      .from('conversations')
-      .update({
-        unread_count: (conv.unread_count ?? 0) + 1,
-        message_count: (conv.message_count ?? 0) + 1,
-      })
-      .eq('id', conversationId);
-  }
 }

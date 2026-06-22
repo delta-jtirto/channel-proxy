@@ -6,7 +6,7 @@ import {
   upsertContact,
   upsertConversation,
   insertMessage,
-  incrementConversationCounts,
+  bumpConversation,
 } from '@/lib/db/queries';
 import { getServiceClient } from '@/lib/db/supabase';
 import { decryptCredentials } from '@/lib/credentials';
@@ -100,17 +100,18 @@ export async function POST(
         displayName,
         avatarUrl,
       );
-      const conversationId = await upsertConversation(
+      const preview = msg.text_body?.slice(0, 200) ?? null;
+      const { id: conversationId, isNew } = await upsertConversation(
         companyId,
         'line',
         contactId,
         account.id,
         msg.channel_thread_id,
-        msg.text_body?.slice(0, 200) ?? null,
+        preview,
         msg.subject ?? null,
       );
       const { isDuplicate } = await insertMessage(conversationId, msg);
-      if (!isDuplicate) await incrementConversationCounts(conversationId);
+      if (!isDuplicate && !isNew) await bumpConversation(conversationId, preview, 'inbound');
       if (!isDuplicate) forwardInboundToSupport({ account, msg, conversationId });
     }
 
