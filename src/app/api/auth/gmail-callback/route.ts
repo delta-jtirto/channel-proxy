@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
         is_active: true,
         updated_at: new Date().toISOString(),
       },
-      { onConflict: 'company_id,channel' },
+      { onConflict: 'company_id,channel,handle' },
     );
 
     // Redirect the popup to the caller's chosen return URL (set by

@@ -152,7 +152,44 @@ export async function PUT(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ account: data });
+  // Replace the channel<->property binding set when prop_ids is present.
+  // Absent => leave the existing set untouched (so credential-only /
+  // display_name-only updates don't silently wipe bindings). Present
+  // (even []) => delete-all then re-insert; [] means "all properties".
+  let propIds: string[] | undefined;
+  if (Array.isArray(body.prop_ids)) {
+    const ids: string[] = body.prop_ids.filter(
+      (p: unknown): p is string => typeof p === 'string' && p.trim().length > 0,
+    );
+    propIds = ids;
+
+    const { error: delErr } = await supabase
+      .from('channel_account_properties')
+      .delete()
+      .eq('account_id', id);
+    if (delErr) {
+      return NextResponse.json({ error: delErr.message }, { status: 500 });
+    }
+
+    if (ids.length > 0) {
+      const { error: insErr } = await supabase
+        .from('channel_account_properties')
+        .insert(
+          ids.map((prop_id) => ({
+            account_id: id,
+            prop_id,
+            company_id: existing.company_id,
+          })),
+        );
+      if (insErr) {
+        return NextResponse.json({ error: insErr.message }, { status: 500 });
+      }
+    }
+  }
+
+  return NextResponse.json({
+    account: propIds !== undefined ? { ...data, prop_ids: propIds } : data,
+  });
 }
 
 /**

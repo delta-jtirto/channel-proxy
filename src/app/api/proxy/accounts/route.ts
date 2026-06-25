@@ -109,7 +109,31 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ accounts: data });
+  // Attach the property binding set for each account. 0 rows = "all
+  // properties" (legacy default); we return prop_ids: [] in that case.
+  const accountIds = (data ?? []).map((a) => a.id);
+  const propsByAccount = new Map<string, string[]>();
+  if (accountIds.length > 0) {
+    const { data: propRows, error: propErr } = await supabase
+      .from('channel_account_properties')
+      .select('account_id, prop_id')
+      .in('account_id', accountIds);
+    if (propErr) {
+      return NextResponse.json({ error: propErr.message }, { status: 500 });
+    }
+    for (const row of propRows ?? []) {
+      const list = propsByAccount.get(row.account_id) ?? [];
+      list.push(row.prop_id);
+      propsByAccount.set(row.account_id, list);
+    }
+  }
+
+  const accounts = (data ?? []).map((a) => ({
+    ...a,
+    prop_ids: propsByAccount.get(a.id) ?? [],
+  }));
+
+  return NextResponse.json({ accounts });
 }
 
 /**
@@ -123,6 +147,13 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const { company_id, channel, display_name, credentials, host_id } = body;
   const delivery_target: DeliveryTarget = body.delivery_target === 'support' ? 'support' : 'bpo';
+  // Optional channel<->property binding set. Empty/absent = "all
+  // properties" (legacy default) -- we insert no rows in that case.
+  const propIds: string[] = Array.isArray(body.prop_ids)
+    ? body.prop_ids.filter(
+        (p: unknown): p is string => typeof p === 'string' && p.trim().length > 0,
+      )
+    : [];
 
   if (!company_id || !channel || !display_name || !credentials) {
     return NextResponse.json(
@@ -163,5 +194,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ account: data }, { status: 201 });
+  // Persist the channel<->property binding set, if any. Each row carries
+  // company_id for RLS (mirrors channel_accounts). 0 rows = all properties.
+  if (propIds.length > 0) {
+    const { error: propErr } = await supabase
+      .from('channel_account_properties')
+      .insert(
+        propIds.map((prop_id) => ({ account_id: data.id, prop_id, company_id })),
+      );
+    if (propErr) {
+      return NextResponse.json({ error: propErr.message }, { status: 500 });
+    }
+  }
+
+  return NextResponse.json({ account: { ...data, prop_ids: propIds } }, { status: 201 });
 }

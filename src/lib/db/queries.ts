@@ -32,7 +32,9 @@ export async function getChannelAccount(companyId: string, channel: string) {
     .eq('company_id', companyId)
     .eq('channel', channel)
     .eq('is_active', true)
-    .single();
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   if (error || !data) return null;
   return data;
@@ -52,7 +54,9 @@ export async function getChannelAccountId(companyId: string, channel: string) {
     .eq('company_id', companyId)
     .eq('channel', channel)
     .eq('is_active', true)
-    .single();
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   if (error || !data) return null;
   return data;

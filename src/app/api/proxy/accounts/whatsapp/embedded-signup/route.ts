@@ -126,6 +126,7 @@ export async function POST(req: NextRequest) {
       company_id,
       channel: 'whatsapp',
       display_name: phone_number_id,
+      handle: phone_number_id,
       credentials: encrypted,
       ...(host_id ? { host_id } : {}),
     })
