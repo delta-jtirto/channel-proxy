@@ -115,3 +115,24 @@ export function verifyTwilioSignature(
   if (!signature) return false;
   return twilio.validateRequest(authToken, signature, publicUrl(req), params);
 }
+
+/**
+ * Per-account variant of verifyTwilioSignature: same URL reconstruction
+ * (publicUrl), but the auth token comes from the channel_accounts row's
+ * resolved credentials (resolveTwilioCreds — the row's own decrypted creds
+ * for a BYO host, else Delta's env token) rather than env directly. This is
+ * the multi-tenant production path (Plan 3's [companyId] routes). `params`
+ * must be the flat form-urlencoded body Twilio POSTed
+ * (application/x-www-form-urlencoded — NOT JSON, unlike every chat webhook
+ * in this repo).
+ */
+export function verifyTwilioSignatureForAccount(
+  authToken: string,
+  req: NextRequest,
+  params: Record<string, string>,
+): boolean {
+  if (!authToken) return false;
+  const signature = req.headers.get('x-twilio-signature');
+  if (!signature) return false;
+  return twilio.validateRequest(authToken, signature, publicUrl(req), params);
+}

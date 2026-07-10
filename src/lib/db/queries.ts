@@ -1,4 +1,5 @@
 import { getServiceClient } from './supabase';
+import { decryptCredentials } from '@/lib/credentials';
 import type { NormalizedMessage } from '@/lib/adapters/types';
 
 // ============================================================
@@ -312,4 +313,213 @@ export async function updateMessageStatusByChannelId(
       ...(errorMessage ? { error_message: errorMessage } : {}),
     })
     .eq('id', existing.id);
+}
+
+// ============================================================
+// Voice account resolution (route by dialed number, email-style)
+// ============================================================
+
+/**
+ * A channel_accounts row, as read by the voice ingest path. NOTE: this
+ * repo has no shared ChannelAccountRow type today — the email webhook route
+ * (webhooks/email/[companyId]/route.ts:8-18) keeps its own file-local copy.
+ * This is the exported version voice uses; the two are a flagged, accepted
+ * duplication (the email copy types `credentials` non-null, which its
+ * decrypt call requires; voice needs it nullable — see below).
+ *
+ * `credentials` is typed `string | null` deliberately even though the DB
+ * column is `TEXT NOT NULL` (initial_schema.sql:49): the Delta-owned voice
+ * ownership mode carries no Twilio creds of its own, so resolveTwilioCreds
+ * must tolerate the ABSENCE of account_sid/auth_token and fall back to env.
+ * (A Delta-owned row still stores *some* non-null encrypted blob to satisfy
+ * the NOT NULL — e.g. an encrypted `{}` or handle-only object — so the env
+ * fallback triggers on missing KEYS, not a null column. Plan 4's connect
+ * flow owns writing that blob.)
+ */
+export interface ChannelAccountRow {
+  id: string;
+  company_id: string;
+  channel: string;
+  display_name: string | null;
+  handle: string | null;
+  delivery_target: string | null;
+  credentials: string | null;
+  is_active: boolean;
+  last_webhook_at: string | null;
+  host_id: string | null;
+}
+
+/**
+ * Resolve the ONE voice account for a company whose Twilio number was dialed.
+ * Mirrors the email webhook's mailbox disambiguation
+ * (webhooks/email/[companyId]/route.ts:64-76): fetch all active voice accounts
+ * for the company and match `handle === toNumber` in JS (PostgREST filtering on
+ * '+'-prefixed E.164 is fine, but JS keeps parity with the email pattern and
+ * tolerates any handle normalization). Returns null when no number matches
+ * (caller 404s / 200-acks). This REPLACES getChannelAccount(companyId,'voice')
+ * — voice is multi-number-per-company (see Architecture), so a single-row
+ * lookup would mis-route.
+ */
+export async function getVoiceAccountByNumber(
+  companyId: string,
+  toNumber: string,
+): Promise<ChannelAccountRow | null> {
+  const supabase = getServiceClient();
+  const { data, error } = await supabase
+    .from('channel_accounts')
+    .select(
+      'id, company_id, channel, display_name, handle, delivery_target, credentials, is_active, last_webhook_at, host_id',
+    )
+    .eq('company_id', companyId)
+    .in('channel', ['voice', 'video'])
+    .eq('is_active', true);
+  if (error) {
+    console.error('Voice account lookup failed:', error.message);
+    return null;
+  }
+  return (
+    ((data ?? []) as ChannelAccountRow[]).find((a) => a.handle === toNumber) ?? null
+  );
+}
+
+/**
+ * Resolve the Twilio credentials for a voice account: the row's own encrypted
+ * creds when a host brought their own Twilio (BYO), else Delta's env-level
+ * account (the default — the row carries no usable creds). Both modes flow
+ * through the same route code; only the returned token differs. The env
+ * fallback triggers on the ABSENCE of account_sid/auth_token keys in the
+ * decrypted blob, not on a null column (the column is NOT NULL — see
+ * ChannelAccountRow).
+ */
+export function resolveTwilioCreds(
+  account: ChannelAccountRow,
+): { accountSid: string; authToken: string } {
+  const rowCreds: Record<string, unknown> =
+    account.credentials != null ? decryptCredentials(account.credentials) : {};
+  const accountSid =
+    typeof rowCreds.account_sid === 'string'
+      ? rowCreds.account_sid
+      : (process.env.TWILIO_ACCOUNT_SID ?? '');
+  const authToken =
+    typeof rowCreds.auth_token === 'string'
+      ? rowCreds.auth_token
+      : (process.env.TWILIO_AUTH_TOKEN ?? '');
+  return { accountSid, authToken };
+}
+
+// ============================================================
+// Call message upsert (voice channel — lifecycle events)
+// ============================================================
+
+export interface CallMessageUpsertArgs {
+  conversationId: string;
+  companyId: string;
+  channel: 'voice' | 'video';
+  direction: 'inbound' | 'outbound';
+  senderId: string;
+  channelMessageId: string; // Twilio CallSid
+  idempotencyKey: string; // callIdempotencyKey(CallSid)
+  textBody: string;
+  metadataPatch: Record<string, unknown>;
+  channelTimestamp: string; // ISO
+}
+
+/**
+ * Create-or-merge-update the ONE messages row for a call's whole lifecycle.
+ * Returns isNew so the caller knows whether to bump conversation counts
+ * (first-ever event for this CallSid) or just refresh the preview (a later
+ * lifecycle event on an already-counted call) — see upsert_call_message's
+ * migration comment for why this distinction matters.
+ */
+export async function upsertCallMessage(
+  args: CallMessageUpsertArgs,
+): Promise<{ id: string; isNew: boolean }> {
+  const supabase = getServiceClient();
+  const { data, error } = await supabase
+    .rpc('upsert_call_message', {
+      p_conversation_id: args.conversationId,
+      p_company_id: args.companyId,
+      p_channel: args.channel,
+      p_direction: args.direction,
+      p_sender_id: args.senderId,
+      p_channel_message_id: args.channelMessageId,
+      p_idempotency_key: args.idempotencyKey,
+      p_text_body: args.textBody,
+      p_metadata_patch: args.metadataPatch,
+      p_channel_timestamp: args.channelTimestamp,
+    })
+    .single();
+
+  if (error) throw new Error(`Failed to upsert call message: ${error.message}`);
+  const row = data as { id: string; is_new: boolean };
+  return { id: row.id, isNew: row.is_new };
+}
+
+/**
+ * Merge fields onto an ALREADY-EXISTING call message's metadata, without
+ * touching text_body/channel_timestamp. Used by events that arrive after the
+ * call's lifecycle text is already set (recording-status, and later
+ * transcript_ref) — see upsert_call_metadata_only's migration comment.
+ */
+export async function mergeCallMetadata(
+  idempotencyKey: string,
+  metadataPatch: Record<string, unknown>,
+): Promise<void> {
+  const supabase = getServiceClient();
+  const { error } = await supabase.rpc('upsert_call_metadata_only', {
+    p_idempotency_key: idempotencyKey,
+    p_metadata_patch: metadataPatch,
+  });
+  if (error) throw new Error(`Failed to merge call metadata: ${error.message}`);
+}
+
+/**
+ * Refresh a conversation's preview/timestamp WITHOUT touching message_count
+ * or unread_count — for a call-lifecycle event that updates an EXISTING
+ * call-message row (bumpConversation would double-count otherwise, since
+ * bump_conversation_on_message always increments message_count).
+ */
+export async function refreshConversationPreview(
+  conversationId: string,
+  preview: string,
+): Promise<void> {
+  const supabase = getServiceClient();
+  const now = new Date().toISOString();
+  await supabase
+    .from('conversations')
+    .update({ last_message_preview: preview, last_message_at: now, updated_at: now })
+    .eq('id', conversationId);
+}
+
+// ============================================================
+// Call transcript utterances
+// ============================================================
+
+export interface CallUtteranceRow {
+  messageId: string;
+  companyId: string;
+  seq: number;
+  speaker: 'agent' | 'guest' | 'system';
+  text: string;
+  isFinal: boolean;
+  offsetMs: number | null;
+  channelTimestamp: string;
+}
+
+export async function insertCallUtterances(rows: CallUtteranceRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  const supabase = getServiceClient();
+  const { error } = await supabase.from('call_utterances').insert(
+    rows.map((r) => ({
+      message_id: r.messageId,
+      company_id: r.companyId,
+      seq: r.seq,
+      speaker: r.speaker,
+      text: r.text,
+      is_final: r.isFinal,
+      offset_ms: r.offsetMs,
+      channel_timestamp: r.channelTimestamp,
+    })),
+  );
+  if (error) throw new Error(`Failed to insert call utterances: ${error.message}`);
 }
