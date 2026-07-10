@@ -1,13 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import twilio from 'twilio';
-import { authenticateRequest } from '@/lib/auth/middleware';
+import { authenticateRequest, getUserCompanyIds } from '@/lib/auth/middleware';
 import { getTwilioVoiceConfig, TOKEN_TTL_SECONDS } from '@/lib/twilio';
-
-interface VoiceTokenBody {
-  /** The Twilio Client identity to mint the token for — e.g. the
-   *  operator id whose browser softphone will register this Device. */
-  identity?: string;
-}
+import { resolveVoiceIdentity } from '@/lib/adapters/twilio-answer';
 
 /**
  * POST /api/proxy/voice/token
@@ -21,19 +16,22 @@ interface VoiceTokenBody {
  * /api/proxy/* routes. Returns 503 (mirroring the WhatsApp embedded-signup
  * route) when Twilio is not configured.
  *
- * Spike scope: `identity` is validated non-empty only. Plan 3 should bind
- * it to the authenticated operator so a token can't be minted for someone
- * else's identity.
+ * Security: the token identity is the operator's company voice queue
+ * (`voice:{companyId}`), derived server-side from the authenticated user —
+ * NEVER read from the request body. company_id is the only trust boundary, so
+ * a browser can only register a Device for its own company; a forged body
+ * `identity` is ignored. The request needs no body.
  */
 export async function POST(req: NextRequest) {
   const auth = await authenticateRequest(req);
   if ('error' in auth) return auth.error;
 
-  const body = (await req.json().catch(() => ({}))) as VoiceTokenBody;
-  const identity = typeof body.identity === 'string' ? body.identity.trim() : '';
-  if (!identity) {
-    return NextResponse.json({ error: 'identity is required' }, { status: 400 });
+  const companyIds = await getUserCompanyIds(auth.user.id, auth.user.accessToken);
+  if (companyIds.length === 0) {
+    return NextResponse.json({ error: 'No company for operator' }, { status: 403 });
   }
+  // Multi-company operators ring for their primary (first) company in v1.
+  const identity = resolveVoiceIdentity(companyIds[0]);
 
   const config = getTwilioVoiceConfig();
   if (!config) {
