@@ -1,0 +1,28 @@
+{
+  "_comment": "REAL Twilio Real-Time Transcription payload captured by the Plan 2 spike 2026-07-10 (CallSid redacted-ish, AccountSid replaced). Delivery = webhook POST, application/x-www-form-urlencoded; these are the parsed form params (parseTwilioForm output). TranscriptionData is a nested JSON STRING. Track diarizes: inbound_track=guest(caller), outbound_track=agent(our side). transcription-started fires first (no TranscriptionData); transcription-content carries text.",
+  "started_event": {
+    "LanguageCode": "en-US",
+    "TranscriptionSid": "GT2297340b406ee1a3d2361bf46f1e95b2",
+    "PartialResults": "false",
+    "TranscriptionEvent": "transcription-started",
+    "CallSid": "CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "TranscriptionEngine": "google",
+    "Timestamp": "2026-07-10T07:51:52.635326768Z",
+    "AccountSid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "Track": "both_tracks",
+    "ProviderConfiguration": "{\"profanityFilter\":\"true\",\"speechModel\":\"telephony\",\"enableAutomaticPunctuation\":\"true\"}",
+    "SequenceId": "1"
+  },
+  "content_event": {
+    "LanguageCode": "en-US",
+    "TranscriptionSid": "GT2297340b406ee1a3d2361bf46f1e95b2",
+    "TranscriptionEvent": "transcription-content",
+    "CallSid": "CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "TranscriptionData": "{\"transcript\":\"hey, I'm a guest trying to\",\"confidence\":0.89702916}",
+    "Timestamp": "2026-07-10T07:52:12.415477120Z",
+    "Final": "true",
+    "AccountSid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "Track": "inbound_track",
+    "SequenceId": "3"
+  }
+}
