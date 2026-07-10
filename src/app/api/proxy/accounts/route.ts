@@ -36,6 +36,9 @@ function extractHandle(
       return s('ig_user_id');
     case 'line':
       return s('channel_id');
+    case 'voice':
+    case 'video':
+      return s('phone_number'); // Twilio E.164 number, e.g. '+16505551234'
     default:
       return null;
   }

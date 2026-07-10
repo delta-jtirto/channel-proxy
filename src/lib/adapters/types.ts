@@ -2,7 +2,7 @@
 // Channel Adapter Interfaces & Shared Types
 // ============================================================
 
-export type Channel = 'whatsapp' | 'instagram' | 'line' | 'email' | 'telegram' | 'wati';
+export type Channel = 'whatsapp' | 'instagram' | 'line' | 'email' | 'telegram' | 'wati' | 'voice' | 'video';
 
 export type MessageDirection = 'inbound' | 'outbound';
 
@@ -15,7 +15,10 @@ export type MessageContentType =
   | 'location'
   | 'sticker'
   | 'template'
-  | 'interactive';
+  | 'interactive'
+  // A phone-call turn (voice/video channel). Distinct from 'audio', which
+  // means a voice-note attachment on a chat channel.
+  | 'call';
 
 export type MessageStatus =
   | 'received'
