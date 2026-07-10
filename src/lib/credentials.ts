@@ -28,6 +28,17 @@ export function encryptCredentials(data: Record<string, unknown>): string {
 }
 
 /**
+ * Credentials blob for a Delta-OWNED voice/video account row. The column is
+ * NOT NULL, but Delta-owned numbers use the shared env Twilio account, so we
+ * store an empty (encrypted) object — resolveTwilioCreds then falls back to
+ * TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN. A host-BYO row would instead store
+ * encryptCredentials({ account_sid, auth_token }).
+ */
+export function deltaOwnedCredentialsBlob(): string {
+  return encryptCredentials({});
+}
+
+/**
  * Decrypt a credentials string produced by encryptCredentials().
  */
 export function decryptCredentials(encoded: string): Record<string, unknown> {

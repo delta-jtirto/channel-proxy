@@ -6,9 +6,27 @@ import {
   type AuthUser,
 } from '@/lib/auth/middleware';
 import { getServiceClient } from '@/lib/db/supabase';
-import { encryptCredentials } from '@/lib/credentials';
+import { encryptCredentials, deltaOwnedCredentialsBlob } from '@/lib/credentials';
 
 type DeliveryTarget = 'bpo' | 'support';
+
+/**
+ * A voice/video account is Delta-OWNED (uses the shared env Twilio account)
+ * unless the connect request brings its own Twilio creds — both `account_sid`
+ * AND `auth_token` present. Delta-owned rows store an empty encrypted blob
+ * (deltaOwnedCredentialsBlob) so resolveTwilioCreds falls back to env; the
+ * dialed number still lands in `handle` (extractHandle), never the secret blob.
+ */
+function hasByoTwilioCreds(credentials: Record<string, unknown>): boolean {
+  const sid = credentials.account_sid;
+  const token = credentials.auth_token;
+  return (
+    typeof sid === 'string' &&
+    sid.trim().length > 0 &&
+    typeof token === 'string' &&
+    token.trim().length > 0
+  );
+}
 
 /**
  * Pull a human-readable handle out of the credentials bundle so the
@@ -168,8 +186,17 @@ export async function POST(req: NextRequest) {
   const denied = await checkScope(auth.user, company_id, delivery_target);
   if (denied) return denied;
 
-  // Encrypt credentials before storing
-  const encryptedCreds = encryptCredentials(credentials);
+  // Encrypt credentials before storing. A Delta-owned voice/video number
+  // carries no BYO Twilio creds, so store an empty (encrypted) blob — the
+  // credentials column is NOT NULL, and resolveTwilioCreds env-falls-back on
+  // the absent account_sid/auth_token. The dialed number still lands in
+  // `handle` below (extractHandle reads phone_number). Chat channels and
+  // host-BYO voice rows keep their per-account encrypted creds untouched.
+  const isDeltaOwnedVoice =
+    (channel === 'voice' || channel === 'video') && !hasByoTwilioCreds(credentials);
+  const encryptedCreds = isDeltaOwnedVoice
+    ? deltaOwnedCredentialsBlob()
+    : encryptCredentials(credentials);
   const handle = extractHandle(channel, credentials);
 
   const supabase = getServiceClient();
