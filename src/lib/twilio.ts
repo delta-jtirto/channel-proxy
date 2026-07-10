@@ -13,15 +13,6 @@ import { type NextRequest } from 'next/server';
  * Design doc: AI CS BPO repo → docs/plans/2026-07-08-voice-video-channel-plan.md
  */
 
-/**
- * Fixed spike identity. The browser softphone (built later in the BPO
- * repo) registers a Twilio Device under this identity, and the inbound
- * voice webhook dials `<Client>spike-agent</Client>` so the agent's
- * browser rings. Plan 3 replaces this constant with a real
- * operator-routing lookup (which agent owns this number / conversation).
- */
-export const SPIKE_AGENT_IDENTITY = 'spike-agent';
-
 /** Access-token lifetime. Twilio's own default is 3600s (1 hour). */
 export const TOKEN_TTL_SECONDS = 3600;
 
@@ -101,23 +92,7 @@ export async function parseTwilioForm(
 }
 
 /**
- * Validate the `X-Twilio-Signature` header against the reconstructed
- * public URL and the POSTed form params. Returns false on a missing auth
- * token, a missing signature header, or a mismatch — callers reject 403.
- */
-export function verifyTwilioSignature(
-  req: NextRequest,
-  params: Record<string, string>,
-): boolean {
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  if (!authToken) return false;
-  const signature = req.headers.get('x-twilio-signature');
-  if (!signature) return false;
-  return twilio.validateRequest(authToken, signature, publicUrl(req), params);
-}
-
-/**
- * Per-account variant of verifyTwilioSignature: same URL reconstruction
+ * Validate the `X-Twilio-Signature` header for a channel_accounts row: same URL reconstruction
  * (publicUrl), but the auth token comes from the channel_accounts row's
  * resolved credentials (resolveTwilioCreds — the row's own decrypted creds
  * for a BYO host, else Delta's env token) rather than env directly. This is
