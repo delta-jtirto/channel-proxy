@@ -6,7 +6,9 @@ import {
   resolveCallerContactId,
   recordingStoragePath,
   callIdempotencyKey,
+  parseTranscriptionEvent,
 } from './twilio-voice';
+import sample from './__fixtures__/twilio-transcription-event.sample.json';
 
 describe('mapTwilioCallStatus', () => {
   it('maps queued/ringing/in-progress to our in-progress (no ringing-vs-answered distinction, matches formatCallPreview)', () => {
@@ -69,5 +71,21 @@ describe('recordingStoragePath', () => {
 describe('callIdempotencyKey', () => {
   it('prefixes the CallSid so it cannot collide with chat idempotency_keys', () => {
     expect(callIdempotencyKey('CAxxxx')).toBe('voice_CAxxxx');
+  });
+});
+
+describe('parseTranscriptionEvent (real Plan 2 spike capture 2026-07-10)', () => {
+  it('returns null for a transcription-started (setup) event', () => {
+    expect(parseTranscriptionEvent(sample.started_event)).toBeNull();
+  });
+  it('extracts speaker/text/final/seq/confidence from a transcription-content event', () => {
+    const u = parseTranscriptionEvent(sample.content_event);
+    expect(u).not.toBeNull();
+    expect(u!.speaker).toBe('guest'); // Track: inbound_track
+    expect(u!.text).toBe("hey, I'm a guest trying to");
+    expect(u!.isFinal).toBe(true); // Final: "true"
+    expect(u!.seq).toBe(3); // SequenceId: "3"
+    expect(u!.confidence).toBeCloseTo(0.897, 2);
+    expect(u!.callSid).toBe(sample.content_event.CallSid);
   });
 });

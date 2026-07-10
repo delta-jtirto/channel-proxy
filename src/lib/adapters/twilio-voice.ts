@@ -105,3 +105,62 @@ export function recordingStoragePath(companyId: string, callSid: string): string
 export function callIdempotencyKey(callSid: string): string {
   return `voice_${callSid}`;
 }
+
+// ============================================================
+// Real-Time Transcription event parsing (Task 7)
+// ============================================================
+
+export interface ParsedUtterance {
+  callSid: string;
+  transcriptionSid: string;
+  speaker: 'agent' | 'guest' | 'system';
+  text: string;
+  confidence: number | null;
+  isFinal: boolean;
+  seq: number;
+  timestamp: string;
+}
+
+/**
+ * Parse a Twilio Real-Time Transcription webhook event (form params as
+ * parseTwilioForm returns them) into our utterance shape. Shape CONFIRMED from
+ * the Plan 2 spike capture 2026-07-10 (fixture above). Only `transcription-
+ * content` events carry text; `transcription-started`/`-stopped` → null.
+ * `TranscriptionData` is a nested JSON string; `Track` diarizes
+ * (inbound_track=guest, outbound_track=agent); `Final` is "true"/"false".
+ */
+export function parseTranscriptionEvent(
+  p: Record<string, string>,
+): ParsedUtterance | null {
+  if (p.TranscriptionEvent !== 'transcription-content') return null;
+
+  let transcript = '';
+  let confidence: number | null = null;
+  try {
+    const data = JSON.parse(p.TranscriptionData ?? '{}') as {
+      transcript?: string;
+      confidence?: number;
+    };
+    transcript = data.transcript ?? '';
+    confidence = typeof data.confidence === 'number' ? data.confidence : null;
+  } catch {
+    return null; // malformed TranscriptionData — skip, don't crash the webhook
+  }
+  if (!transcript) return null;
+
+  const speaker =
+    p.Track === 'inbound_track' ? 'guest'
+    : p.Track === 'outbound_track' ? 'agent'
+    : 'system';
+
+  return {
+    callSid: p.CallSid ?? '',
+    transcriptionSid: p.TranscriptionSid ?? '',
+    speaker,
+    text: transcript,
+    confidence,
+    isFinal: p.Final === 'true',
+    seq: Number.parseInt(p.SequenceId ?? '0', 10),
+    timestamp: p.Timestamp ?? new Date().toISOString(),
+  };
+}

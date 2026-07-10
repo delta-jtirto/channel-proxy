@@ -491,6 +491,28 @@ export async function refreshConversationPreview(
     .eq('id', conversationId);
 }
 
+/**
+ * Look up the call's messages.id by its idempotency_key
+ * (callIdempotencyKey(CallSid)). Mirrors updateMessageStatusByChannelId's
+ * SELECT-by-column shape, but uses .maybeSingle() over .single() because the
+ * row's ABSENCE is an expected, non-error outcome here: a transcription-content
+ * event can race ahead of the voice-status webhook that creates the call's
+ * message row (the transcription route acks 200 + warns in that case). Using
+ * .single() would spuriously raise PGRST116 on every such race — same rationale
+ * insertMessage documents for its own .maybeSingle() choice.
+ */
+export async function getCallMessageId(
+  idempotencyKey: string,
+): Promise<string | null> {
+  const supabase = getServiceClient();
+  const { data } = await supabase
+    .from('messages')
+    .select('id')
+    .eq('idempotency_key', idempotencyKey)
+    .maybeSingle();
+  return data?.id ?? null;
+}
+
 // ============================================================
 // Call transcript utterances
 // ============================================================
