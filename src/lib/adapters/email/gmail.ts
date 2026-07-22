@@ -309,12 +309,45 @@ export async function gmailApiSend(
   const refreshToken = creds.refresh_token as string;
   const senderEmail = creds.email_address as string;
   const token = await getAccessToken(refreshToken);
+  const gmailThreadId = msg.metadata?.gmail_thread_id as string | undefined;
+
+  // Recipient-side threading: mail clients thread by the RFC 5322
+  // In-Reply-To / References headers, not by our Gmail threadId (that only
+  // threads OUR sent copy). We store the Gmail thread id inbound, not the
+  // RFC Message-IDs, so recover them here with one metadata lookup.
+  // Any failure degrades to a headerless send (previous behavior).
+  let inReplyTo: string | undefined;
+  let references: string | undefined;
+  if (gmailThreadId) {
+    try {
+      const tRes = await fetch(
+        `${GMAIL_API}/threads/${gmailThreadId}?format=metadata&metadataHeaders=Message-ID`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (tRes.ok) {
+        const thread = (await tRes.json()) as {
+          messages?: Array<{ payload?: { headers?: Array<{ name: string; value: string }> } }>;
+        };
+        const ids = (thread.messages ?? [])
+          .map((m) => m.payload?.headers?.find((h) => h.name.toLowerCase() === 'message-id')?.value)
+          .filter((v): v is string => !!v);
+        if (ids.length > 0) {
+          inReplyTo = ids[ids.length - 1];
+          references = ids.join(' ');
+        }
+      }
+    } catch {
+      // non-fatal — send proceeds unthreaded
+    }
+  }
 
   const subject = (msg.metadata?.subject as string) ?? 'Re: Your message';
   const raw = [
     `From: ${senderEmail}`,
     `To: ${recipientEmail}`,
     `Subject: ${subject}`,
+    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
+    ...(references ? [`References: ${references}`] : []),
     `Content-Type: text/plain; charset=utf-8`,
     '',
     msg.text,
@@ -322,8 +355,8 @@ export async function gmailApiSend(
 
   const encodedMessage = Buffer.from(raw).toString('base64url');
   const body: { raw: string; threadId?: string } = { raw: encodedMessage };
-  if (msg.metadata?.gmail_thread_id) {
-    body.threadId = msg.metadata.gmail_thread_id as string;
+  if (gmailThreadId) {
+    body.threadId = gmailThreadId;
   }
 
   const res = await fetch(`${GMAIL_API}/messages/send`, {
