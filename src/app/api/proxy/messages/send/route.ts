@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { authenticateRequest, getUserCompanyIds } from '@/lib/auth/middleware';
+import { authenticateRequest } from '@/lib/auth/middleware';
+import { checkScope } from '@/lib/auth/scope';
 import { getServiceClient } from '@/lib/db/supabase';
 import { decryptCredentials } from '@/lib/credentials';
 import { registry } from '@/lib/adapters/registry';
@@ -50,16 +51,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
   }
 
-  // Verify user access
-  const userCompanies = await getUserCompanyIds(auth.user.id, auth.user.accessToken);
-  if (!userCompanies.includes(convo.company_id)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-
-  // Get channel account credentials
+  // Get channel account credentials + its delivery target (needed to pick
+  // the right authorization path — support operators authorize by workspace
+  // claim, not user_companies).
   const { data: account } = await supabase
     .from('channel_accounts')
-    .select('credentials, is_active')
+    .select('credentials, is_active, delivery_target')
     .eq('id', convo.account_id)
     .single();
 
@@ -69,6 +66,14 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
+
+  // Verify user access (BPO via user_companies, Support via workspace claim).
+  const denied = await checkScope(
+    auth.user,
+    convo.company_id,
+    account.delivery_target === 'support' ? 'support' : 'bpo',
+  );
+  if (denied) return denied;
 
   // Get the outbound adapter
   const adapter = registry.getOutbound(convo.channel as Channel);

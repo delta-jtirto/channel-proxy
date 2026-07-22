@@ -1,14 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import {
-  authenticateRequest,
-  getSupportWorkspaceId,
-  getUserCompanyIds,
-  type AuthUser,
-} from '@/lib/auth/middleware';
+import { authenticateRequest } from '@/lib/auth/middleware';
+import { checkScope, type DeliveryTarget } from '@/lib/auth/scope';
 import { getServiceClient } from '@/lib/db/supabase';
 import { encryptCredentials, deltaOwnedCredentialsBlob } from '@/lib/credentials';
-
-type DeliveryTarget = 'bpo' | 'support';
 
 /**
  * A voice/video account is Delta-OWNED (uses the shared env Twilio account)
@@ -60,37 +54,6 @@ function extractHandle(
     default:
       return null;
   }
-}
-
-/**
- * Common scope check. An authenticated user may operate on a
- * `company_id` if either:
- *   - their `user_companies` row links them to it (BPO path), or
- *   - their JWT carries `app_metadata.workspace_id` equal to it AND
- *     `delivery_target === 'support'` (Support path).
- *
- * Returns null on success, an error NextResponse on rejection.
- */
-async function checkScope(
-  user: AuthUser,
-  companyId: string,
-  deliveryTarget: DeliveryTarget,
-): Promise<NextResponse | null> {
-  if (deliveryTarget === 'support') {
-    const ws = getSupportWorkspaceId(user);
-    if (!ws || ws !== companyId) {
-      return NextResponse.json(
-        { error: 'Forbidden — JWT workspace_id does not match the requested tenant' },
-        { status: 403 },
-      );
-    }
-    return null;
-  }
-  const companies = await getUserCompanyIds(user.id, user.accessToken);
-  if (!companies.includes(companyId)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-  return null;
 }
 
 /**
